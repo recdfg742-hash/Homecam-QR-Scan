@@ -8,13 +8,26 @@ import threading
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
-import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+try:
+    import cv2
+    import numpy as np
+    import pyautogui
+    import pygetwindow as gw
+    import win32gui
+    from PIL import Image, ImageTk
+    CV_AVAILABLE = True
+except ImportError:
+    CV_AVAILABLE = False
+    win32gui = None
 
 try:
     import winsound
 except ImportError:
     winsound = None
+
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # ==========================================
 # 1. FRONT 전용 모델 설정
@@ -37,6 +50,8 @@ def get_base_dir():
 BASE_DIR = get_base_dir()
 COUNT_FILE = os.path.join(BASE_DIR, "counts_front.json")
 STATE_FILE = os.path.join(BASE_DIR, "pallet_state_front.json")
+CAPTURE_DIR = os.path.join(BASE_DIR, "captures_front")
+os.makedirs(CAPTURE_DIR, exist_ok=True)
 
 FILE_ATTRIBUTE_NORMAL = 0x80
 FILE_ATTRIBUTE_HIDDEN = 0x02
@@ -103,6 +118,8 @@ LANG_PACK = {
         "ng_pallet_model_msg": "[NG: Pallet QR 모델 코드가 일치하지 않습니다]\n\n현재 선택 모델: {model} ({target})\n스캔 Pallet QR: {code}\n\n올바른 Pallet QR을 준비한 뒤 관리자 비밀번호로 해제하세요.",
         "ng_pallet_dup_title": "🚫 NG - Pallet QR 중복/순서 오류",
         "ng_pallet_dup_msg": "[NG: Pallet QR 중복 리딩 또는 박스 미완료]\n\n1) 최소 1개 이상의 박스를 완료한 후에만 팔레트 교체가 가능합니다.\n2) 이미 사용된 Pallet QR은 중복 등록할 수 없습니다.\n\n관리자 비밀번호를 입력하여 해제하세요.",
+        "ng_direction_title": "🚫 NG - 제품 적재 방향 오류",
+        "ng_direction_msg": "[비전 판정 NG: 제품 적입 방향 불일치]\n\nFRONT 제품의 완충 패킹 블록 방향이 올바르지 않습니다.\n은색 알루미늄 가공면이 위로 노출되었습니다.\n\n제품을 올바른 방향으로 재적재한 후 관리자 비밀번호를 입력하세요.",
         "ng_label_dup_title": "⚠️ Label QR NG - 중복 스캔",
         "ng_label_dup_msg": "[Label QR NG: 이미 사용된 Label QR입니다]\n\n스캔 Label QR: {code}...\n이미 등록/포장 완료된 중복 라벨입니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_group_title": "⚠️ Grouping NG - 수량 불일치",
@@ -162,6 +179,8 @@ LANG_PACK = {
         "ng_pallet_model_msg": "[NG: Pallet QR model code does not match]\n\nSelected Model: {model} ({target})\nScanned Pallet QR: {code}\n\nEnter 6-digit Admin Password to unlock.",
         "ng_pallet_dup_title": "🚫 NG - Duplicate Pallet Scan",
         "ng_pallet_dup_msg": "[NG: Pallet QR Duplicate or Sequence Error]\n\n1) At least 1 box must be completed before closing the pallet.\n2) Cannot re-scan an already closed Pallet QR.\n\nEnter Admin Password to unlock.",
+        "ng_direction_title": "🚫 NG - Part Loading Direction Error",
+        "ng_direction_msg": "[Vision NG: Incorrect Loading Direction]\n\nFRONT parts are loaded in reverse.\nSilver aluminum surface detected instead of black packing ribs.\n\nReload parts correctly and enter Admin Password.",
         "ng_label_dup_title": "⚠️ Label QR NG - Duplicate Label",
         "ng_label_dup_msg": "[Label QR NG: This Label QR is already used]\n\nScanned Label: {code}...\nDuplicate box label detected.\n\nEnter 6-digit Admin Password to unlock.",
         "ng_group_title": "⚠️ Grouping NG - Quantity Mismatch",
@@ -221,6 +240,8 @@ LANG_PACK = {
         "ng_pallet_model_msg": "[NG: Kod modelu na etykiecie palety nie pasuje]\n\nWybrany model: {model} ({target})\nPaleta: {code}\n\nWprowadź 6-cyfrowe hasło administratora.",
         "ng_pallet_dup_title": "🚫 NG - Błąd duplikatu palety",
         "ng_pallet_dup_msg": "[NG: Błąd skanowania palety]\n\n1) Należy ukończyć co najmniej 1 pudełko przed zamknięciem palety.\n2) Nie można ponownie użyć zarejestrowanej palety.\n\nWprowadź hasło administratora.",
+        "ng_direction_title": "🚫 NG - Błąd kierunku włożenia części",
+        "ng_direction_msg": "[Wizja NG: Nieprawidłowy kierunek ułożenia części FRONT]\n\nWykryto jasną powierzchnię aluminiową zamiast czarnych elementów tłumiących.\n\nPopraw ułożenie części i wprowadź hasło administratora.",
         "ng_label_dup_title": "⚠️ Label QR NG - Duplikat etykiety",
         "ng_label_dup_msg": "[Label QR NG: Ta etykieta została 이미 사용되었습니다]\n\nZeskanowana etykieta: {code}...\nWykryto duplikat etykiety pudełka.\n\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
         "ng_group_title": "⚠️ Grouping NG - Niezgodność ilości",
@@ -257,8 +278,8 @@ class QRScanStationApp:
     def __init__(self, root):
         self.root = root
         self.root.title("QR SCAN STATION [FRONT]")
-        self.root.geometry("1420x820")
-        self.root.minsize(1240, 740)
+        self.root.geometry("1440x880")
+        self.root.minsize(1280, 780)
         self.root.configure(bg=BG_MAIN)
 
         self.current_lang = tk.StringVar(value="한국어")
@@ -287,10 +308,16 @@ class QRScanStationApp:
         self.file_lock = threading.Lock()
         self.global_scan_buffer = []
 
+        self.embedded_window_hwnd = None
+        self.is_monitoring_running = True
+
         self.setup_custom_styles()
         self.setup_ui()
         self.setup_global_key_listener()
         self.on_model_changed()
+
+        # 블루스택 창을 좌측 하단 프레임 안으로 도킹시키는 스레드 시작
+        self.start_embed_monitor()
 
     def t(self, key, **kwargs):
         pack = LANG_PACK.get(self.current_lang.get(), LANG_PACK["한국어"])
@@ -307,6 +334,89 @@ class QRScanStationApp:
                     time.sleep(0.08)
         threading.Thread(target=_beep, daemon=True).start()
 
+    # ==========================================
+    # 블루스택 창을 UI 내부로 강제 도킹 (Windows API)
+    # ==========================================
+    def start_embed_monitor(self):
+        def _monitor():
+            while self.is_monitoring_running:
+                try:
+                    if gw and win32gui:
+                        # 캡처에 보이는 'BlueStacks App Player' 창 탐색
+                        targets = [w for w in gw.getAllWindows() if any(k in w.title.lower() for k in ['bluestacks', 'xiaomi', 'mi home', '미홈', '샤오미'])]
+                        if targets and not self.embedded_window_hwnd:
+                            win = targets[0]
+                            hwnd = win._hWnd
+                            parent_hwnd = self.cam_container.winfo_id()
+
+                            # 창 스타일 변경 (타이틀바, 테두리 제거)
+                            style = win32gui.GetWindowLong(hwnd, -16)  # GWL_STYLE
+                            style &= ~0x00C00000  # WS_CAPTION 제거
+                            style &= ~0x00040000  # WS_SIZEBOX 제거
+                            style |= 0x40000000   # WS_CHILD 추가
+                            win32gui.SetWindowLong(hwnd, -16, style)
+
+                            # 우리 Tkinter 프레임 안으로 부모 설정
+                            win32gui.SetParent(hwnd, parent_hwnd)
+                            win32gui.MoveWindow(hwnd, 0, 0, 390, 230, True)
+
+                            self.embedded_window_hwnd = hwnd
+                            self.root.after(0, lambda: self.lbl_cam_status.config(text="● LIVE (블루스택 홈캠 도킹 완료)", fg="#22c55e"))
+                except Exception:
+                    pass
+                time.sleep(1.0)
+
+        threading.Thread(target=_monitor, daemon=True).start()
+
+    # ==========================================
+    # 비전 적재 방향 검사 (도킹된 홈캠 화면 캡처)
+    # ==========================================
+    def inspect_front_loading_direction(self, label_code):
+        """
+        FRONT 판정:
+        - 1번 사진(NG): 은색 알루미늄 가공면이 위로 노출 (밝은 픽셀 비율 급증)
+        - 2번 사진(OK): 검은색 완충 패킹 블록이 정렬 (어두운 영역 우세)
+        """
+        if not (CV_AVAILABLE and pyautogui):
+            return True, "vision_library_missing"
+
+        try:
+            # 좌측 하단 도킹 컨테이너 화면 직접 캡처
+            self.root.update_idletasks()
+            x = self.cam_container.winfo_rootx()
+            y = self.cam_container.winfo_rooty()
+            w = self.cam_container.winfo_width()
+            h = self.cam_container.winfo_height()
+
+            if w < 50 or h < 50:
+                return True, "camera_frame_too_small"
+
+            shot = pyautogui.screenshot(region=(x, y, w, h))
+            frame = cv2.cvtColor(np.array(shot), cv2.COLOR_RGB2BGR)
+
+            # 박스 내부 중심부 ROI 분석 (상하 25%~85%, 좌우 25%~85%)
+            roi = frame[int(h*0.25):int(h*0.85), int(w*0.25):int(w*0.85)]
+            gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+
+            # 은색 가공면의 밝은 픽셀(170 이상) 검출
+            bright_pixels = np.sum(gray_roi > 170)
+            total_pixels = gray_roi.size
+            bright_ratio = bright_pixels / total_pixels
+
+            # 캡처 파일 자동 저장
+            now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_name = label_code.replace(";", "_")[:20]
+            capture_path = os.path.join(CAPTURE_DIR, f"{now_str}_{safe_name}.jpg")
+            cv2.imwrite(capture_path, frame)
+
+            # 1번 사진처럼 은색 면이 위로 올라오면 NG 발생 (기준치: 0.12)
+            if bright_ratio > 0.12:
+                return False, f"bright_ratio={bright_ratio:.3f}"
+            return True, f"bright_ratio={bright_ratio:.3f}"
+
+        except Exception as e:
+            return True, str(e)
+
     def load_model_counts(self):
         default_counts = {m: {"total": 0, "ok": 0, "ng": 0} for m in MODEL_CONFIG}
         if os.path.exists(COUNT_FILE):
@@ -318,7 +428,7 @@ class QRScanStationApp:
                             default_counts[m] = data[m]
                     return default_counts
             except Exception:
-                return default_counts
+                pass
         return default_counts
 
     def save_model_counts(self):
@@ -339,7 +449,7 @@ class QRScanStationApp:
                             default_state[m] = data[m]
                     return default_state
             except Exception:
-                return default_state
+                pass
         return default_state
 
     def save_pallet_state(self):
@@ -454,19 +564,19 @@ class QRScanStationApp:
             left_panel, text="", 
             font=("맑은 고딕", 11, "bold"), fg=ACCENT_YELLOW, bg=BG_PANEL, justify=tk.LEFT
         )
-        self.lbl_model_info.pack(anchor="w", padx=20, pady=(15, 10))
+        self.lbl_model_info.pack(anchor="w", padx=20, pady=(10, 4))
 
         self.status_box = tk.Label(
-            left_panel, text="READY", font=("Arial", 38, "bold"),
-            fg="#adb5bd", bg="#2a2e37", height=3, relief="flat"
+            left_panel, text="READY", font=("Arial", 32, "bold"),
+            fg="#adb5bd", bg="#2a2e37", height=2, relief="flat"
         )
-        self.status_box.pack(fill=tk.X, padx=20, pady=6)
+        self.status_box.pack(fill=tk.X, padx=20, pady=4)
 
         self.lbl_last_scan = tk.Label(
             left_panel, text=f"{self.t('last_scan')}: -", font=("맑은 고딕", 9),
             fg=TEXT_MUTED, bg=BG_PANEL, anchor="w"
         )
-        self.lbl_last_scan.pack(fill=tk.X, padx=20, pady=(10, 3))
+        self.lbl_last_scan.pack(fill=tk.X, padx=20, pady=(6, 2))
 
         self.lbl_input_guide = tk.Label(left_panel, text=self.t("input_guide"), font=("맑은 고딕", 9),
                                         fg=TEXT_MUTED, bg=BG_PANEL, anchor="w")
@@ -477,57 +587,74 @@ class QRScanStationApp:
             insertbackground="#ffffff", relief="flat", highlightthickness=1,
             highlightbackground="#343c4c", highlightcolor="#3b82f6"
         )
-        self.scan_entry.pack(fill=tk.X, padx=20, pady=(4, 15), ipady=5)
+        self.scan_entry.pack(fill=tk.X, padx=20, pady=(4, 8), ipady=4)
         self.scan_entry.bind("<Return>", lambda e: self.process_scan(self.scan_entry.get()))
         self.scan_entry.bind("<KeyRelease>", self.on_entry_key_release)
 
         stats_frame = tk.Frame(left_panel, bg=BG_PANEL)
-        stats_frame.pack(fill=tk.X, padx=20, pady=3)
+        stats_frame.pack(fill=tk.X, padx=20, pady=2)
         stats_frame.columnconfigure((0, 1, 2), weight=1)
 
-        card_total = tk.Frame(stats_frame, bg="#1a1e26", pady=6)
+        card_total = tk.Frame(stats_frame, bg="#1a1e26", pady=4)
         card_total.grid(row=0, column=0, padx=2, sticky="nsew")
-        self.lbl_total_val = tk.Label(card_total, text="0", font=("Arial", 16, "bold"), fg=TEXT_COLOR, bg="#1a1e26")
+        self.lbl_total_val = tk.Label(card_total, text="0", font=("Arial", 14, "bold"), fg=TEXT_COLOR, bg="#1a1e26")
         self.lbl_total_val.pack()
         tk.Label(card_total, text="TOTAL", font=("Arial", 8, "bold"), fg=TEXT_MUTED, bg="#1a1e26").pack()
 
-        card_ok = tk.Frame(stats_frame, bg="#1a1e26", pady=6)
+        card_ok = tk.Frame(stats_frame, bg="#1a1e26", pady=4)
         card_ok.grid(row=0, column=1, padx=2, sticky="nsew")
-        self.lbl_ok_val = tk.Label(card_ok, text="0", font=("Arial", 16, "bold"), fg="#28a745", bg="#1a1e26")
+        self.lbl_ok_val = tk.Label(card_ok, text="0", font=("Arial", 14, "bold"), fg="#28a745", bg="#1a1e26")
         self.lbl_ok_val.pack()
         tk.Label(card_ok, text="OK", font=("Arial", 8, "bold"), fg=TEXT_MUTED, bg="#1a1e26").pack()
 
-        card_ng = tk.Frame(stats_frame, bg="#1a1e26", pady=6)
+        card_ng = tk.Frame(stats_frame, bg="#1a1e26", pady=4)
         card_ng.grid(row=0, column=2, padx=2, sticky="nsew")
-        self.lbl_ng_val = tk.Label(card_ng, text="0", font=("Arial", 16, "bold"), fg="#dc3545", bg="#1a1e26")
+        self.lbl_ng_val = tk.Label(card_ng, text="0", font=("Arial", 14, "bold"), fg="#dc3545", bg="#1a1e26")
         self.lbl_ng_val.pack()
         tk.Label(card_ng, text="NG", font=("Arial", 8, "bold"), fg=TEXT_MUTED, bg="#1a1e26").pack()
 
-        btn_reset = tk.Button(
-            left_panel, text=self.t("reset_btn"), command=self.open_reset_dialog,
+        btn_row = tk.Frame(left_panel, bg=BG_PANEL)
+        btn_row.pack(fill=tk.X, padx=20, pady=(6, 4))
+        self.btn_reset = tk.Button(
+            btn_row, text=self.t("reset_btn"), command=self.open_reset_dialog,
             bg="#2c323d", fg="#ff8787", activebackground="#3d2729", activeforeground="#ff6b6b",
-            relief="flat", font=("맑은 고딕", 9, "bold"), pady=4, cursor="hand2"
+            relief="flat", font=("맑은 고딕", 8, "bold"), pady=3, cursor="hand2"
         )
-        btn_reset.pack(fill=tk.X, padx=20, pady=(8, 4))
-        self.btn_reset = btn_reset
+        self.btn_reset.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 3))
 
         self.btn_manager = tk.Button(
-            left_panel, text=self.t("manager_btn"), command=self.toggle_manager_mode,
+            btn_row, text=self.t("manager_btn"), command=self.toggle_manager_mode,
             bg="#2c323d", fg="#adb5bd", activebackground="#303642", activeforeground="#ffffff",
-            relief="flat", font=("맑은 고딕", 9, "bold"), pady=4, cursor="hand2"
+            relief="flat", font=("맑은 고딕", 8, "bold"), pady=3, cursor="hand2"
         )
-        self.btn_manager.pack(fill=tk.X, padx=20, pady=(0, 8))
+        self.btn_manager.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(3, 0))
 
         self.lbl_pallet_status = tk.Label(
             left_panel, text="현재 팔레트: - (0/12 박스)",
             font=("맑은 고딕", 9, "bold"), fg="#38bdf8", bg=BG_PANEL, anchor="w"
         )
-        self.lbl_pallet_status.pack(fill=tk.X, padx=20, pady=(2, 3))
+        self.lbl_pallet_status.pack(fill=tk.X, padx=20, pady=(2, 2))
 
         self.lbl_pending_status = tk.Label(
-            left_panel, text="", font=("맑은 고딕", 9), fg=TEXT_MUTED, bg=BG_PANEL, anchor="w"
+            left_panel, text="", font=("맑은 고딕", 8), fg=TEXT_MUTED, bg=BG_PANEL, anchor="w"
         )
-        self.lbl_pending_status.pack(fill=tk.X, padx=20, pady=(0, 5))
+        self.lbl_pending_status.pack(fill=tk.X, padx=20, pady=(0, 4))
+
+        # ==========================================
+        # [신규] 좌측 하단 블루스택 창 도킹 컨테이너
+        # ==========================================
+        cam_panel = tk.Frame(left_panel, bg=BG_PANEL)
+        cam_panel.pack(fill=tk.BOTH, expand=True, padx=20, pady=(2, 10))
+
+        top_info = tk.Frame(cam_panel, bg=BG_PANEL)
+        top_info.pack(fill=tk.X)
+        tk.Label(top_info, text="📷 실시간 홈캠 뷰어", font=("맑은 고딕", 9, "bold"), fg="#38bdf8", bg=BG_PANEL).pack(side=tk.LEFT)
+        self.lbl_cam_status = tk.Label(top_info, text="○ 대기 중...", font=("맑은 고딕", 8, "bold"), fg="#f87171", bg=BG_PANEL)
+        self.lbl_cam_status.pack(side=tk.RIGHT)
+
+        self.cam_container = tk.Frame(cam_panel, width=390, height=230, bg="#0f172a", highlightthickness=1, highlightbackground="#334155")
+        self.cam_container.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+        self.cam_container.pack_propagate(False)
 
         right_panel = tk.Frame(main_frame, bg=BG_MAIN)
         right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
@@ -1275,6 +1402,7 @@ class QRScanStationApp:
             self.open_sorting_popup(raw_code)
             return
 
+        # Label QR 스캔 (+ 비전 적재 방향 자동 판정)
         if is_label_qr:
             curr_box_cnt = self.pallet_state[curr_model]["box_count"]
 
@@ -1312,6 +1440,18 @@ class QRScanStationApp:
                 )
                 return
 
+            # 비전 방향 판정 실행
+            vision_ok, detail = self.inspect_front_loading_direction(raw_code)
+            if not vision_ok:
+                self.set_status("방향 NG", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text=self.t("ng_direction_title"),
+                    msg=self.t("ng_direction_msg"),
+                    header_bg="#3a1c1f", header_fg="#ff6b6b"
+                )
+                return
+
+        # 단품 QR
         if not is_label_qr:
             if len(self.pending_items) >= MAX_ITEMS_PER_BOX:
                 self.set_status("NG", "#dc3545", "#3a1c1f")
