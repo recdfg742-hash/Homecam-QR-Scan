@@ -1,467 +1,2199 @@
-# -*- coding: utf-8 -*-
-"""
-QR SCAN STATION
-- 모델 선택(S-FRONT / S-REAR / R-FRONT / R-REAR) 후 바코드 스캔
-- 앞 10자리 인식코드 일치 여부로 OK/NG 판정
-- Label QR(필드 6개 이상) 스캔 시 그 이전 미그룹 DMC들을 하나로 묶음
-- 모델별로 별도의 엑셀 파일(S-FRONT.xlsx 등)에 실시간 저장
-- NG 발생 시 6자리 비밀번호를 입력해야 잠금 해제
-"""
-
-import json
 import os
 import sys
+import json
+import time
+import glob
+import ctypes
+import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
-from pathlib import Path
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+# 비전/이미지 처리 라이브러리
+try:
+    import cv2
+    import numpy as np
+    import pyautogui
+    import pygetwindow as gw
+    from PIL import Image, ImageTk
+    CV_AVAILABLE = True
+except ImportError:
+    CV_AVAILABLE = False
 
 try:
-    import openpyxl
-    from openpyxl.styles import Font, Alignment, PatternFill
-    from openpyxl.utils import get_column_letter
+    import winsound
 except ImportError:
-    raise SystemExit(
-        "openpyxl 모듈이 필요합니다.\n"
-        "명령 프롬프트에서 아래 명령을 실행한 뒤 다시 실행하세요:\n"
-        "    pip install openpyxl"
-    )
+    winsound = None
 
-# EXE로 빌드된 경우 실행 파일이 있는 폴더에, 아니면 이 스크립트가 있는 폴더에 데이터를 저장합니다.
-if getattr(sys, "frozen", False):
-    DATA_DIR = Path(sys.executable).parent
-else:
-    DATA_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
-
-CONFIG_PATH = DATA_DIR / "scan_station_config.json"
-
-MODELS = {
-    "S-FRONT": "MPL02916AD",
-    "S-REAR": "MPL02915AD",
-    "R-FRONT": "MPL02926AD",
-    "R-REAR": "MPL02925AD",
+# ==========================================
+# 1. FRONT 전용 모델 설정
+# ==========================================
+MODEL_CONFIG = {
+    'S-FRONT': 'MPL02916AD',
+    'R-FRONT': 'MPL02926AD'
 }
 
-DEFAULT_PASSWORD = "000000"
-HEADERS = ["DAY", "TIME", "Label QR", "DMC", "RESULT"]
+CODE_TO_MODEL = {v: k for k, v in MODEL_CONFIG.items()}
+DEFAULT_PASSWORD = "123456"
+MAX_ITEMS_PER_BOX = 10
+MAX_BOXES_PER_PALLET = 12
 
-# ---------- 설정(비밀번호) ----------
+def get_base_dir():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 
-def load_config():
-    if CONFIG_PATH.exists():
-        try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if "password" in data:
-                    return data
-        except Exception:
-            pass
-    data = {"password": DEFAULT_PASSWORD}
-    save_config(data)
-    return data
+BASE_DIR = get_base_dir()
+COUNT_FILE = os.path.join(BASE_DIR, "counts_front.json")
+STATE_FILE = os.path.join(BASE_DIR, "pallet_state_front.json")
+CAMERA_CONFIG_FILE = os.path.join(BASE_DIR, "camera_config_front.json")
+CAMERA_REFERENCE_DIR = os.path.join(BASE_DIR, "camera_reference_front")
+os.makedirs(CAMERA_REFERENCE_DIR, exist_ok=True)
 
+CAMERA_PREVIEW_W = 380
+CAMERA_PREVIEW_H = 220
+ORIENTATION_MIN_MARGIN = 0.05
 
-def save_config(data):
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+FILE_ATTRIBUTE_NORMAL = 0x80
+FILE_ATTRIBUTE_HIDDEN = 0x02
 
-
-# ---------- 엑셀 입출력 ----------
-
-def excel_path(model):
-    return DATA_DIR / f"{model}.xlsx"
-
-
-def load_records(model):
-    """모델의 엑셀 파일에서 기존 기록을 불러오고, 병합된 Label QR 셀은 값을 채워서 복원합니다."""
-    path = excel_path(model)
-    records = []
-    if not path.exists():
-        return records
+def unhide_file(filepath):
     try:
-        wb = openpyxl.load_workbook(path)
-        ws = wb.active
-        merge_map = {}
-        for merged in ws.merged_cells.ranges:
-            if merged.min_col == 3 and merged.max_col == 3:
-                top_value = ws.cell(row=merged.min_row, column=3).value
-                for r in range(merged.min_row, merged.max_row + 1):
-                    merge_map[r] = top_value
-        for row in range(2, ws.max_row + 1):
-            day = ws.cell(row=row, column=1).value
-            time_ = ws.cell(row=row, column=2).value
-            label = merge_map.get(row, ws.cell(row=row, column=3).value)
-            dmc = ws.cell(row=row, column=4).value
-            result = ws.cell(row=row, column=5).value
-            if day is None and dmc is None:
-                continue
-            records.append({
-                "day": day or "",
-                "time": time_ or "",
-                "label": label or "",
-                "dmc": dmc or "",
-                "result": result or "",
-            })
-    except Exception as e:
-        print("엑셀 로드 오류:", e)
-    return records
+        if os.name == 'nt' and os.path.exists(filepath):
+            ctypes.windll.kernel32.SetFileAttributesW(str(filepath), FILE_ATTRIBUTE_NORMAL)
+    except Exception:
+        pass
+
+def hide_file(filepath):
+    try:
+        if os.name == 'nt' and os.path.exists(filepath):
+            ctypes.windll.kernel32.SetFileAttributesW(str(filepath), FILE_ATTRIBUTE_HIDDEN)
+    except Exception:
+        pass
+
+def get_quarter_filename(model_name, dt=None):
+    if dt is None:
+        dt = datetime.now()
+    year_2d = dt.strftime("%y")
+    quarter = (dt.month - 1) // 3 + 1
+    safe_model = model_name.replace('-', '_')
+    return f"Y{year_2d}_{quarter}Q_{safe_model}.xlsx"
+
+LANG_PACK = {
+    "한국어": {
+        "title": "QR SCAN STATION [FRONT]",
+        "pw_setting": "⚙ 비밀번호 설정",
+        "tab_scan": "  QR Scan  ",
+        "tab_grouping": "  Grouping  ",
+        "tab_recode": "  Re-code  ",
+        "model_label": "모델",
+        "code_label": "인식코드",
+        "last_scan": "마지막 스캔",
+        "input_guide": "바코드 스캔 입력 (어느 화면에서나 스캔 가능)",
+        "reset_btn": "RESET (카운터 초기화)",
+        "manager_btn": "MANAGER MODE",
+        "manager_btn_on": "MANAGER MODE [ON]",
+        "pending_status": "미그룹 스캔 {count}건 – Label QR 대기 중",
+        "pallet_status": "현재 팔레트: {pallet} ({boxes}/{max_b} 박스)",
+        "record_header": "{model} 기록",
+        "grouping_header": "{model} Pallet - Label Grouping 현황",
+        "th_pallet": "Pallet Label QR",
+        "th_box_seq": "박스 번호",
+        "th_day": "DAY",
+        "th_time": "TIME",
+        "th_label": "Label QR",
+        "th_dmc": "DMC",
+        "th_judgment": "JUDGMENT",
+        "th_content": "Content",
+        "filter_day": "조회 일자:",
+        "filter_time": "시간대:",
+        "search_btn": "🔍 검색",
+        "save_btn": "💾 Save (엑셀 저장)",
+        "box_complete": "[Box Grouping Done: {count} pcs]",
+        "dup_scan_tag": "[중복 스캔]",
+        "sorting_title": "⚠️ Sorting 필요 제품 경고",
+        "sorting_msg": "[알림: Sorting 필요 제품]\n\nDMC Code: {code}\n\n해당 제품은 Sorting 대상 리스트에 등록되어 있습니다.\n바코드를 별도로 격리한 뒤 [Enter] 키를 누르세요.",
+        "ng_model_title": "⚠️ NG - 모델 불일치",
+        "ng_model_msg": "[NG: 선택 모델과 바코드 코드가 일치하지 않습니다]\n\n현재 선택 모델: {model} ({target})\n스캔된 코드: {code}\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
+        "ng_pallet_model_title": "⚠️ NG - Pallet QR 모델 불일치",
+        "ng_pallet_model_msg": "[NG: Pallet QR 모델 코드가 일치하지 않습니다]\n\n현재 선택 모델: {model} ({target})\n스캔 Pallet QR: {code}\n\n올바른 Pallet QR을 준비한 뒤 관리자 비밀번호로 해제하세요.",
+        "ng_pallet_dup_title": "🚫 NG - Pallet QR 중복/순서 오류",
+        "ng_pallet_dup_msg": "[NG: Pallet QR 중복 리딩 또는 박스 미완료]\n\n1) 최소 1개 이상의 박스를 완료한 후에만 팔레트 교체가 가능합니다.\n2) 이미 사용된 Pallet QR은 중복 등록할 수 없습니다.\n\n관리자 비밀번호를 입력하여 해제하세요.",
+        "ng_orientation_title": "🚫 NG - 적재 방향 불량",
+        "ng_orientation_msg": "[NG: 비전 판정 결과 제품 적재 방향이 올바르지 않습니다]\n\n박스를 다시 확인하여 방향을 바로잡은 뒤,\n동일한 Label QR을 다시 스캔하세요.\n\n(상세: {detail})\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
+        "ng_label_dup_title": "⚠️ Label QR NG - 중복 스캔",
+        "ng_label_dup_msg": "[Label QR NG: 이미 사용된 Label QR입니다]\n\n스캔 Label QR: {code}...\n이미 등록/포장 완료된 중복 라벨입니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
+        "ng_group_title": "⚠️ Grouping NG - 수량 불일치",
+        "ng_group_msg": "[Grouping NG: 단품 수량과 Label 포장 수량 불일치]\n\nLabel QR 지정 수량: {expected}개\n현재 스캔된 단품 수량: {current}개\n\n수량이 일치하지 않아 묶음을 진행할 수 없습니다.\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
+        "ng_limit_title": "⚠️ NG - Label QR 누락",
+        "ng_limit_msg": "[NG 발생: Label QR 누락]\n\n단품이 이미 {max_cnt}개 모두 스캔되었습니다.\n11번째 단품은 기록되지 않습니다.\nLabel QR을 먼저 스캔하여 박스 묶음을 완료하십시오.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
+        "ng_mgr_err_title": "⚠️ NG - 관리자 모드 오류",
+        "ng_mgr_err_msg": "[NG: 관리자 모드가 아닌 일반 모드에서 QR 리딩 필요]\n\n스캔 바코드: {code}\n신규 제품은 일반 모드에서 등록해야 합니다.\n해당 스캔은 기록되지 않습니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
+        "ng_dup_title": "🚫 QR NG - 중복 바코드 감지",
+        "ng_dup_msg": "[QR NG 발생: 이미 스캔된 바코드입니다]\n\n스캔 바코드: {code}\n해당 제품 및 연결된 박스 헤더가 NG로 변경되었습니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
+        "ng_pallet_mid_title": "⚠️ NG - Pallet 리딩 시점 오류",
+        "ng_pallet_mid_msg": "[NG: 단품 스캔 도중에는 Pallet QR을 리딩할 수 없습니다]\n\n현재 {count}개의 단품이 스캔 중입니다.\n10개 단품 및 Label QR 스캔을 완료한 후 Pallet QR을 리딩하세요.",
+        "ng_pallet_limit_title": "🚫 NG - Pallet QR 누락 (13박스 초과)",
+        "ng_pallet_limit_msg": "[NG: Pallet QR 리딩 누락]\n\n이미 12개 박스가 채워졌습니다.\n새 Pallet QR을 리딩하지 않고 13번째 이상 박스를 진행할 수 없습니다.\n\n관리자 비밀번호를 입력하여 해제하세요.",
+        "pallet_popup_title": "Pallet QR 스캔 대기",
+        "pallet_popup_msg": "12개 박스 포장이 완료되었습니다.\n새로운 Pallet QR을 스캔해주세요.",
+        "camera_panel_title": "📷 적재 방향 검사 (홈캠 뷰어)",
+        "camera_status_connecting": "카메라 창 찾는 중...",
+        "camera_status_disconnected": "카메라 창 실행 필요 (Mi Home)",
+        "camera_status_no_ref": "기준(OK/NG) 이미지 미등록",
+        "camera_status_ready": "검사 대기 중",
+        "btn_roi_set": "🔲 검사영역(ROI) 설정",
+        "btn_roi_set_on": "🔲 영역 지정 중... (드래그)",
+        "btn_save_ok_ref": "✅ OK 기준 저장",
+        "btn_save_ng_ref": "❌ NG 기준 저장",
+        "roi_not_set_msg": "카메라 화면을 마우스 드래그하여 검사 영역(ROI)을 지정하세요.",
+        "ref_saved_msg": "{kind} 기준 이미지가 저장되었습니다. ({model})",
+        "manager_only_msg": "MANAGER MODE에서만 설정 가능합니다.",
+        "unlock_btn": "확인 및 잠금 해제",
+        "confirm_btn": "확인 (Enter)",
+        "pw_err": "비밀번호가 올바르지 않습니다."
+    }
+}
+
+BG_MAIN = "#1a1f26"
+BG_PANEL = "#222731"
+BG_INPUT = "#15181e"
+TEXT_COLOR = "#e1e4ea"
+TEXT_MUTED = "#8b949e"
+ACCENT_YELLOW = "#f59f00"
+
+def extract_orientation_feature(bgr_image):
+    hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
+    _, s, v = cv2.split(hsv)
+    mean_v = float(np.mean(v))
+    mean_s = float(np.mean(s))
+    bright_ratio = float(np.mean(v > 140)) * 100.0
+    return np.array([mean_v, mean_s, bright_ratio], dtype=np.float64)
+
+def feature_distance(feat_a, feat_b):
+    scale = np.array([255.0, 255.0, 100.0], dtype=np.float64)
+    diff = (feat_a - feat_b) / scale
+    return float(np.sqrt(np.sum(diff ** 2)))
 
 
-def compute_groups(records):
-    groups = []
-    for r in records:
-        if groups and groups[-1]["label"] == r["label"]:
-            groups[-1]["items"].append(r)
-        else:
-            groups.append({"label": r["label"], "items": [r]})
-    return groups
-
-
-def save_records(model, records):
-    path = excel_path(model)
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = model
-    header_fill = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
-    for c, h in enumerate(HEADERS, start=1):
-        cell = ws.cell(row=1, column=c, value=h)
-        cell.font = Font(bold=True)
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-
-    row_idx = 2
-    groups = compute_groups(records)
-    for g in groups:
-        start_row = row_idx
-        for i, it in enumerate(g["items"]):
-            ws.cell(row=row_idx, column=1, value=it["day"])
-            ws.cell(row=row_idx, column=2, value=it["time"])
-            ws.cell(row=row_idx, column=3, value=g["label"] if i == 0 else None)
-            ws.cell(row=row_idx, column=4, value=it["dmc"])
-            result_cell = ws.cell(row=row_idx, column=5, value=it["result"])
-            if it["result"] == "NG":
-                result_cell.font = Font(color="C00000", bold=True)
-            else:
-                result_cell.font = Font(color="1E7B34", bold=True)
-            row_idx += 1
-        if g["label"] and len(g["items"]) > 1:
-            ws.merge_cells(start_row=start_row, start_column=3, end_row=row_idx - 1, end_column=3)
-            ws.cell(row=start_row, column=3).alignment = Alignment(vertical="center", wrap_text=True)
-
-    widths = [12, 10, 55, 26, 9]
-    for i, w in enumerate(widths, start=1):
-        ws.column_dimensions[get_column_letter(i)].width = w
-
-    wb.save(path)
-
-
-# ---------- GUI ----------
-
-BG = "#1b1f22"
-PANEL = "#23282c"
-PANEL2 = "#2a3035"
-LINE = "#3a4147"
-TEXT = "#e7ebee"
-TEXT_DIM = "#93a0a8"
-OK_C = "#35c471"
-OK_BG = "#1d3a2a"
-NG_C = "#e5484d"
-NG_BG = "#3f1f21"
-AMBER = "#dfa538"
-MONO = "Consolas"
-
-
-class ScanStationApp:
+class QRScanStationApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("QR SCAN STATION")
-        self.root.geometry("1080x680")
-        self.root.configure(bg=BG)
+        self.root.title("QR SCAN STATION [FRONT]")
+        self.root.geometry("1420x860")
+        self.root.minsize(1240, 760)
+        self.root.configure(bg=BG_MAIN)
 
-        self.config_data = load_config()
-        self.model_var = tk.StringVar(value="")
-        self.records = []
-        self.locked = False
+        self.current_lang = tk.StringVar(value="한국어")
+        self.current_model = tk.StringVar(value='S-FRONT')
+        self.admin_password = DEFAULT_PASSWORD
+        self.model_session_id = 0
 
-        self._build_style()
-        self._build_topbar()
-        self.body = tk.Frame(self.root, bg=BG)
-        self.body.pack(fill="both", expand=True, padx=16, pady=(0, 16))
-        self.render_body()
+        self.is_manager_mode = False
+        self.active_popup = None
+        self.pallet_wait_popup = None
 
-    def _build_style(self):
-        style = ttk.Style()
+        self.last_scanned_code = ""
+        self.last_scanned_time = 0.0
+        self.auto_submit_timer = None
+
+        self.model_counts = self.load_model_counts()
+        self.pallet_state = self.load_pallet_state()
+
+        self.scanned_history_by_model = {m: set() for m in MODEL_CONFIG}
+        self.scanned_label_by_model = {m: set() for m in MODEL_CONFIG}
+        self.scanned_pallet_by_model = {m: set() for m in MODEL_CONFIG}
+        self.sorting_list_by_model = {m: set() for m in MODEL_CONFIG}
+
+        self.pending_items = []
+        self.pending_tree_ids = []
+        self.file_lock = threading.Lock()
+        self.global_scan_buffer = []
+
+        # 비전 및 화면 캡처 관련 상태
+        self.camera_config = self.load_camera_config()
+        self.latest_cam_frame = None
+        self.roi_select_mode = False
+        self.roi_drag_start = None
+        self.roi_preview_scale = 1.0
+        self.camera_preview_photo = None
+        self.last_orientation_detail = ""
+        self.last_orientation_status = ""
+
+        self.setup_custom_styles()
+        self.setup_ui()
+        self.setup_global_key_listener()
+        self.on_model_changed()
+
+        # 화면 캡처 기반 실시간 뷰어 시작
+        self.start_window_stream()
+
+    def t(self, key, **kwargs):
+        pack = LANG_PACK.get(self.current_lang.get(), LANG_PACK["한국어"])
+        text = pack.get(key, "")
+        if kwargs:
+            return text.format(**kwargs)
+        return text
+
+    def play_alarm_sound(self):
+        def _beep():
+            if winsound:
+                for _ in range(3):
+                    winsound.Beep(1000, 350)
+                    time.sleep(0.08)
+        threading.Thread(target=_beep, daemon=True).start()
+
+    # ---------------- 샤오미 창 실시간 캡처 루프 ----------------
+    def start_window_stream(self):
+        def _worker():
+            while True:
+                if CV_AVAILABLE and gw and pyautogui:
+                    try:
+                        targets = [w for w in gw.getAllWindows() if any(k in w.title.lower() for k in ['xiaomi', 'mi home', 'camera', '미홈', '샤오미', 'bluestacks'])]
+                        if targets:
+                            win = targets[0]
+                            if not win.isMinimized and win.width > 50 and win.height > 50:
+                                shot = pyautogui.screenshot(region=(win.left, win.top, win.width, win.height))
+                                frame = cv2.cvtColor(np.array(shot), cv2.COLOR_RGB2BGR)
+                                self.latest_cam_frame = frame
+                            else:
+                                self.latest_cam_frame = None
+                        else:
+                            self.latest_cam_frame = None
+                    except Exception:
+                        self.latest_cam_frame = None
+                time.sleep(0.08)
+
+        threading.Thread(target=_worker, daemon=True).start()
+        self.root.after(300, self.update_camera_preview)
+
+    def update_camera_preview(self):
+        frame = self.latest_cam_frame
+
+        if frame is None:
+            self.lbl_camera_status.config(text=self.t("camera_status_disconnected"), fg="#ff8787")
+            self.camera_canvas.delete("all")
+            self.camera_canvas.create_text(CAMERA_PREVIEW_W//2, CAMERA_PREVIEW_H//2, text="[샤오미/미홈 창을 띄워주세요]", fill="#64748b", font=("맑은 고딕", 9))
+            self.root.after(400, self.update_camera_preview)
+            return
+
+        h_img, w_img = frame.shape[:2]
+        self.roi_preview_scale = min(CAMERA_PREVIEW_W / w_img, CAMERA_PREVIEW_H / h_img)
+        disp_w = max(1, int(w_img * self.roi_preview_scale))
+        disp_h = max(1, int(h_img * self.roi_preview_scale))
+
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        resized = cv2.resize(rgb, (disp_w, disp_h))
+        pil_img = Image.fromarray(resized)
+        self.camera_preview_photo = ImageTk.PhotoImage(pil_img)
+
+        self.camera_canvas.delete("all")
+        self.camera_canvas.create_image(0, 0, anchor="nw", image=self.camera_preview_photo)
+
+        roi = self.get_current_roi()
+        if roi:
+            rx = roi['x'] * self.roi_preview_scale
+            ry = roi['y'] * self.roi_preview_scale
+            rw = roi['w'] * self.roi_preview_scale
+            rh = roi['h'] * self.roi_preview_scale
+            self.camera_canvas.create_rectangle(rx, ry, rx + rw, ry + rh, outline="#facc15", width=2)
+
+        if roi is None:
+            self.lbl_camera_status.config(text=self.t("roi_not_set_msg"), fg="#f59f00")
+        elif not (self.load_reference_feature("ok") is not None and self.load_reference_feature("ng") is not None):
+            self.lbl_camera_status.config(text=self.t("camera_status_no_ref"), fg="#f59f00")
+        else:
+            self.lbl_camera_status.config(text=self.t("camera_status_ready"), fg="#8bd9a0")
+
+        self.root.after(100, self.update_camera_preview)
+
+    def toggle_roi_select_mode(self):
+        self.roi_select_mode = not self.roi_select_mode
+        if self.roi_select_mode:
+            self.btn_roi_set.config(text=self.t("btn_roi_set_on"), bg="#2b5278", fg="#ffffff")
+        else:
+            self.btn_roi_set.config(text=self.t("btn_roi_set"), bg="#2c323d", fg="#adb5bd")
+
+    def on_roi_canvas_press(self, event):
+        if not self.roi_select_mode:
+            return
+        self.roi_drag_start = (event.x, event.y)
+
+    def on_roi_canvas_drag(self, event):
+        if not self.roi_select_mode or self.roi_drag_start is None:
+            return
+        self.camera_canvas.delete("roi_drag_rect")
+        x0, y0 = self.roi_drag_start
+        self.camera_canvas.create_rectangle(x0, y0, event.x, event.y, outline="#3b82f6", width=2, tags="roi_drag_rect")
+
+    def on_roi_canvas_release(self, event):
+        if not self.roi_select_mode or self.roi_drag_start is None:
+            return
+        x0, y0 = self.roi_drag_start
+        x1, y1 = event.x, event.y
+        self.roi_drag_start = None
+
+        left, top = min(x0, x1), min(y0, y1)
+        width, height = abs(x1 - x0), abs(y1 - y0)
+        if width < 10 or height < 10 or self.roi_preview_scale <= 0:
+            return
+
+        roi_dict = {
+            "x": int(left / self.roi_preview_scale),
+            "y": int(top / self.roi_preview_scale),
+            "w": int(width / self.roi_preview_scale),
+            "h": int(height / self.roi_preview_scale),
+        }
+        self.camera_config.setdefault("roi_by_model", {})[self.current_model.get()] = roi_dict
+        self.save_camera_config()
+        self.toggle_roi_select_mode()
+
+    def get_current_roi(self):
+        return self.camera_config.get("roi_by_model", {}).get(self.current_model.get())
+
+    def get_reference_path(self, kind):
+        safe_model = self.current_model.get().replace('-', '_')
+        return os.path.join(CAMERA_REFERENCE_DIR, f"{safe_model}_{kind}.png")
+
+    def save_reference_image(self, kind):
+        if not self.is_manager_mode:
+            messagebox.showwarning("MANAGER MODE", self.t("manager_only_msg"))
+            return
+        roi = self.get_current_roi()
+        if not roi:
+            messagebox.showwarning("ROI", self.t("roi_not_set_msg"))
+            return
+        if self.latest_cam_frame is None:
+            messagebox.showwarning("Camera", self.t("camera_status_disconnected"))
+            return
+
+        f = self.latest_cam_frame
+        x, y, w, h = roi['x'], roi['y'], roi['w'], roi['h']
+        crop = f[y:y+h, x:x+w]
+        if crop is None or crop.size == 0:
+            return
+
+        path = self.get_reference_path(kind)
+        cv2.imwrite(path, crop)
+        kind_label = "OK" if kind == "ok" else "NG"
+        messagebox.showinfo("OK", self.t("ref_saved_msg", kind=kind_label, model=self.current_model.get()))
+
+    def load_reference_feature(self, kind):
+        path = self.get_reference_path(kind)
+        if not (CV_AVAILABLE and os.path.exists(path)):
+            return None
+        img = cv2.imread(path)
+        if img is None:
+            return None
+        return extract_orientation_feature(img)
+
+    def judge_box_orientation(self):
+        if not CV_AVAILABLE or self.latest_cam_frame is None:
+            return None, "camera_unavailable"
+        roi = self.get_current_roi()
+        if not roi:
+            return None, "roi_not_set"
+
+        f = self.latest_cam_frame
+        x, y, w, h = roi['x'], roi['y'], roi['w'], roi['h']
+        crop = f[y:y+h, x:x+w]
+        if crop is None or crop.size == 0:
+            return None, "invalid_crop"
+
+        ok_feat = self.load_reference_feature("ok")
+        ng_feat = self.load_reference_feature("ng")
+        if ok_feat is None or ng_feat is None:
+            return None, "reference_not_registered"
+
+        live_feat = extract_orientation_feature(crop)
+        dist_to_ok = feature_distance(live_feat, ok_feat)
+        dist_to_ng = feature_distance(live_feat, ng_feat)
+        detail = f"d_ok={dist_to_ok:.3f}, d_ng={dist_to_ng:.3f}"
+
+        if dist_to_ok < dist_to_ng and (dist_to_ng - dist_to_ok) >= ORIENTATION_MIN_MARGIN:
+            return True, detail
+        return False, detail
+
+    def load_camera_config(self):
+        if os.path.exists(CAMERA_CONFIG_FILE):
+            try:
+                with open(CAMERA_CONFIG_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {"roi_by_model": {}}
+
+    def save_camera_config(self):
         try:
-            style.theme_use("clam")
+            with open(CAMERA_CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.camera_config, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
-        style.configure("TCombobox", fieldbackground=PANEL2, background=PANEL2, foreground=TEXT)
-        style.configure("Treeview", background="#20242a", fieldbackground="#20242a",
-                         foreground=TEXT, rowheight=24, bordercolor=LINE, borderwidth=0)
-        style.configure("Treeview.Heading", background=PANEL2, foreground=TEXT_DIM, relief="flat")
-        style.map("Treeview", background=[("selected", LINE)])
 
-    def _build_topbar(self):
-        bar = tk.Frame(self.root, bg=BG)
-        bar.pack(fill="x", padx=16, pady=14)
+    def load_model_counts(self):
+        default_counts = {m: {"total": 0, "ok": 0, "ng": 0} for m in MODEL_CONFIG}
+        if os.path.exists(COUNT_FILE):
+            try:
+                with open(COUNT_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    for m in default_counts:
+                        if m in data:
+                            default_counts[m] = data[m]
+                    return default_counts
+            except Exception:
+                pass
+        return default_counts
 
-        left = tk.Frame(bar, bg=BG)
-        left.pack(side="left")
+    def save_model_counts(self):
+        try:
+            with open(COUNT_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.model_counts, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
-        tk.Label(left, text="QR SCAN STATION", bg=BG, fg=TEXT_DIM,
-                 font=(MONO, 11, "bold")).pack(side="left", padx=(0, 12))
+    def load_pallet_state(self):
+        default_state = {m: {"current_pallet": "", "box_count": 0} for m in MODEL_CONFIG}
+        if os.path.exists(STATE_FILE):
+            try:
+                with open(STATE_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    for m in default_state:
+                        if m in data:
+                            default_state[m] = data[m]
+                    return default_state
+            except Exception:
+                pass
+        return default_state
 
-        combo = ttk.Combobox(left, textvariable=self.model_var, values=list(MODELS.keys()),
-                              state="readonly", width=14, font=(MONO, 11, "bold"))
-        combo.pack(side="left")
-        combo.bind("<<ComboboxSelected>>", self.on_model_change)
+    def save_pallet_state(self):
+        try:
+            with open(STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.pallet_state, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
-        tk.Button(bar, text="⚙ 비밀번호 설정", command=self.open_settings,
-                  bg=PANEL2, fg=TEXT_DIM, relief="flat", padx=12, pady=6,
-                  activebackground=LINE, activeforeground=TEXT).pack(side="right")
+    def setup_custom_styles(self):
+        style = ttk.Style()
+        style.theme_use("clam")
 
-    def render_body(self):
-        for w in self.body.winfo_children():
-            w.destroy()
+        style.configure("Dark.TNotebook", background=BG_MAIN, borderwidth=0)
+        style.configure("Dark.TNotebook.Tab", background="#2a2f3a", foreground=TEXT_MUTED,
+                        font=("맑은 고딕", 10, "bold"), padding=[15, 5])
+        style.map("Dark.TNotebook.Tab",
+                  background=[("selected", BG_PANEL)],
+                  foreground=[("selected", "#ffffff")])
 
-        model = self.model_var.get()
-        if not model:
-            tk.Label(self.body, text="모델을 선택하면 검사를 시작합니다",
-                     bg=BG, fg=TEXT, font=(MONO, 14, "bold")).pack(expand=True)
+        style.configure("Dark.TCombobox", 
+                        fieldbackground=BG_INPUT, 
+                        background="#303642", 
+                        foreground="#ffffff", 
+                        arrowcolor="#ffffff",
+                        darkcolor=BG_INPUT, 
+                        lightcolor=BG_INPUT)
+
+        style.configure("Dark.Treeview",
+                        background="#1e232d",
+                        foreground=TEXT_COLOR,
+                        fieldbackground="#1e232d",
+                        rowheight=26,
+                        font=("맑은 고딕", 9))
+        style.configure("Dark.Treeview.Heading",
+                        background="#282e3a",
+                        foreground="#adb5bd",
+                        font=("맑은 고딕", 9, "bold"),
+                        relief="flat")
+        style.map("Dark.Treeview",
+                  background=[("selected", "#2b5278")],
+                  foreground=[("selected", "#ffffff")])
+        style.map("Dark.Treeview.Heading",
+                  background=[("active", "#343c4c")])
+
+    def setup_ui(self):
+        header_frame = tk.Frame(self.root, bg=BG_MAIN, height=45)
+        header_frame.pack(fill=tk.X, padx=20, pady=(10, 4))
+
+        tk.Label(header_frame, text="QR  SCAN  STATION  [FRONT]", font=("Arial", 12, "bold"), 
+                 fg=TEXT_COLOR, bg=BG_MAIN).pack(side=tk.LEFT, padx=(0, 15))
+
+        self.model_combo = ttk.Combobox(
+            header_frame, 
+            textvariable=self.current_model, 
+            values=list(MODEL_CONFIG.keys()), 
+            state="readonly", 
+            font=("맑은 고딕", 10, "bold"), 
+            width=13,
+            style="Dark.TCombobox"
+        )
+        self.model_combo.pack(side=tk.LEFT)
+        self.model_combo.bind("<<ComboboxSelected>>", self.on_model_changed)
+
+        self.lang_combo = ttk.Combobox(
+            header_frame,
+            textvariable=self.current_lang,
+            values=["한국어", "English", "Polski"],
+            state="readonly",
+            font=("맑은 고딕", 9, "bold"),
+            width=9,
+            style="Dark.TCombobox"
+        )
+        self.lang_combo.pack(side=tk.RIGHT, padx=(10, 0))
+        self.lang_combo.bind("<<ComboboxSelected>>", self.on_language_changed)
+
+        self.lbl_lang_icon = tk.Label(header_frame, text="🌐", font=("맑은 고딕", 12), bg=BG_MAIN, fg=TEXT_COLOR)
+        self.lbl_lang_icon.pack(side=tk.RIGHT)
+
+        self.btn_pw = tk.Button(
+            header_frame, text=self.t("pw_setting"), command=self.change_password_dialog,
+            bg="#2c323d", fg=TEXT_COLOR, activebackground="#3a4250", activeforeground="#ffffff",
+            relief="flat", font=("맑은 고딕", 9), padx=10, pady=3, cursor="hand2"
+        )
+        self.btn_pw.pack(side=tk.RIGHT, padx=(0, 15))
+
+        self.notebook = ttk.Notebook(self.root, style="Dark.TNotebook")
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 10))
+
+        self.tab_scan = tk.Frame(self.notebook, bg=BG_MAIN)
+        self.notebook.add(self.tab_scan, text=self.t("tab_scan"))
+
+        self.tab_grouping = tk.Frame(self.notebook, bg=BG_MAIN)
+        self.notebook.add(self.tab_grouping, text=self.t("tab_grouping"))
+
+        self.tab_recode = tk.Frame(self.notebook, bg=BG_MAIN)
+        self.notebook.add(self.tab_recode, text=self.t("tab_recode"))
+
+        self.build_scan_tab()
+        self.build_grouping_tab()
+        self.build_recode_tab()
+
+    def build_scan_tab(self):
+        main_frame = tk.Frame(self.tab_scan, bg=BG_MAIN)
+        main_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+
+        left_panel = tk.Frame(main_frame, bg=BG_PANEL, width=440)
+        left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 15))
+        left_panel.pack_propagate(False)
+
+        self.lbl_model_info = tk.Label(
+            left_panel, text="", 
+            font=("맑은 고딕", 11, "bold"), fg=ACCENT_YELLOW, bg=BG_PANEL, justify=tk.LEFT
+        )
+        self.lbl_model_info.pack(anchor="w", padx=20, pady=(10, 4))
+
+        self.status_box = tk.Label(
+            left_panel, text="READY", font=("Arial", 32, "bold"),
+            fg="#adb5bd", bg="#2a2e37", height=2, relief="flat"
+        )
+        self.status_box.pack(fill=tk.X, padx=20, pady=4)
+
+        self.lbl_last_scan = tk.Label(
+            left_panel, text=f"{self.t('last_scan')}: -", font=("맑은 고딕", 9),
+            fg=TEXT_MUTED, bg=BG_PANEL, anchor="w"
+        )
+        self.lbl_last_scan.pack(fill=tk.X, padx=20, pady=(6, 2))
+
+        self.lbl_input_guide = tk.Label(left_panel, text=self.t("input_guide"), font=("맑은 고딕", 9),
+                                        fg=TEXT_MUTED, bg=BG_PANEL, anchor="w")
+        self.lbl_input_guide.pack(fill=tk.X, padx=20)
+
+        self.scan_entry = tk.Entry(
+            left_panel, font=("Consolas", 11), bg=BG_INPUT, fg="#ffffff",
+            insertbackground="#ffffff", relief="flat", highlightthickness=1,
+            highlightbackground="#343c4c", highlightcolor="#3b82f6"
+        )
+        self.scan_entry.pack(fill=tk.X, padx=20, pady=(4, 8), ipady=4)
+        self.scan_entry.bind("<Return>", lambda e: self.process_scan(self.scan_entry.get()))
+        self.scan_entry.bind("<KeyRelease>", self.on_entry_key_release)
+
+        stats_frame = tk.Frame(left_panel, bg=BG_PANEL)
+        stats_frame.pack(fill=tk.X, padx=20, pady=2)
+        stats_frame.columnconfigure((0, 1, 2), weight=1)
+
+        card_total = tk.Frame(stats_frame, bg="#1a1e26", pady=4)
+        card_total.grid(row=0, column=0, padx=2, sticky="nsew")
+        self.lbl_total_val = tk.Label(card_total, text="0", font=("Arial", 14, "bold"), fg=TEXT_COLOR, bg="#1a1e26")
+        self.lbl_total_val.pack()
+        tk.Label(card_total, text="TOTAL", font=("Arial", 8, "bold"), fg=TEXT_MUTED, bg="#1a1e26").pack()
+
+        card_ok = tk.Frame(stats_frame, bg="#1a1e26", pady=4)
+        card_ok.grid(row=0, column=1, padx=2, sticky="nsew")
+        self.lbl_ok_val = tk.Label(card_ok, text="0", font=("Arial", 14, "bold"), fg="#28a745", bg="#1a1e26")
+        self.lbl_ok_val.pack()
+        tk.Label(card_ok, text="OK", font=("Arial", 8, "bold"), fg=TEXT_MUTED, bg="#1a1e26").pack()
+
+        card_ng = tk.Frame(stats_frame, bg="#1a1e26", pady=4)
+        card_ng.grid(row=0, column=2, padx=2, sticky="nsew")
+        self.lbl_ng_val = tk.Label(card_ng, text="0", font=("Arial", 14, "bold"), fg="#dc3545", bg="#1a1e26")
+        self.lbl_ng_val.pack()
+        tk.Label(card_ng, text="NG", font=("Arial", 8, "bold"), fg=TEXT_MUTED, bg="#1a1e26").pack()
+
+        btn_row = tk.Frame(left_panel, bg=BG_PANEL)
+        btn_row.pack(fill=tk.X, padx=20, pady=(6, 4))
+        self.btn_reset = tk.Button(
+            btn_row, text=self.t("reset_btn"), command=self.open_reset_dialog,
+            bg="#2c323d", fg="#ff8787", activebackground="#3d2729", activeforeground="#ff6b6b",
+            relief="flat", font=("맑은 고딕", 8, "bold"), pady=3, cursor="hand2"
+        )
+        self.btn_reset.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 3))
+
+        self.btn_manager = tk.Button(
+            btn_row, text=self.t("manager_btn"), command=self.toggle_manager_mode,
+            bg="#2c323d", fg="#adb5bd", activebackground="#303642", activeforeground="#ffffff",
+            relief="flat", font=("맑은 고딕", 8, "bold"), pady=3, cursor="hand2"
+        )
+        self.btn_manager.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(3, 0))
+
+        self.lbl_pallet_status = tk.Label(
+            left_panel, text="현재 팔레트: - (0/12 박스)",
+            font=("맑은 고딕", 9, "bold"), fg="#38bdf8", bg=BG_PANEL, anchor="w"
+        )
+        self.lbl_pallet_status.pack(fill=tk.X, padx=20, pady=(2, 2))
+
+        self.lbl_pending_status = tk.Label(
+            left_panel, text="", font=("맑은 고딕", 8), fg=TEXT_MUTED, bg=BG_PANEL, anchor="w"
+        )
+        self.lbl_pending_status.pack(fill=tk.X, padx=20, pady=(0, 4))
+
+        # ---------------- 홈캠 실시간 뷰어 패널 (좌측 하단) ----------------
+        camera_panel = tk.Frame(left_panel, bg=BG_PANEL)
+        camera_panel.pack(fill=tk.BOTH, expand=True, padx=20, pady=(2, 8))
+
+        self.lbl_camera_title = tk.Label(
+            camera_panel, text=self.t("camera_panel_title"), font=("맑은 고딕", 9, "bold"),
+            fg="#38bdf8", bg=BG_PANEL, anchor="w"
+        )
+        self.lbl_camera_title.pack(fill=tk.X)
+
+        self.camera_canvas = tk.Canvas(
+            camera_panel, width=CAMERA_PREVIEW_W, height=CAMERA_PREVIEW_H,
+            bg="#0d0f13", highlightthickness=1, highlightbackground="#343c4c", cursor="crosshair"
+        )
+        self.camera_canvas.pack(pady=(4, 3))
+        self.camera_canvas.bind("<ButtonPress-1>", self.on_roi_canvas_press)
+        self.camera_canvas.bind("<B1-Motion>", self.on_roi_canvas_drag)
+        self.camera_canvas.bind("<ButtonRelease-1>", self.on_roi_canvas_release)
+
+        self.lbl_camera_status = tk.Label(
+            camera_panel, text=self.t("camera_status_connecting"), font=("맑은 고딕", 8),
+            fg=TEXT_MUTED, bg=BG_PANEL, anchor="w"
+        )
+        self.lbl_camera_status.pack(fill=tk.X)
+
+        cam_btn_row = tk.Frame(camera_panel, bg=BG_PANEL)
+        cam_btn_row.pack(fill=tk.X, pady=(4, 0))
+
+        self.btn_roi_set = tk.Button(
+            cam_btn_row, text=self.t("btn_roi_set"), command=self.toggle_roi_select_mode,
+            bg="#2c323d", fg="#adb5bd", relief="flat", font=("맑은 고딕", 8, "bold"), pady=2, cursor="hand2"
+        )
+        self.btn_roi_set.pack(fill=tk.X, pady=(0, 3))
+
+        ref_btn_row = tk.Frame(camera_panel, bg=BG_PANEL)
+        ref_btn_row.pack(fill=tk.X)
+        ref_btn_row.columnconfigure((0, 1), weight=1)
+
+        self.btn_save_ok_ref = tk.Button(
+            ref_btn_row, text=self.t("btn_save_ok_ref"), command=lambda: self.save_reference_image("ok"),
+            bg="#1c3a24", fg="#8bd9a0", relief="flat", font=("맑은 고딕", 8, "bold"), pady=2, cursor="hand2"
+        )
+        self.btn_save_ok_ref.grid(row=0, column=0, sticky="ew", padx=(0, 2))
+
+        self.btn_save_ng_ref = tk.Button(
+            ref_btn_row, text=self.t("btn_save_ng_ref"), command=lambda: self.save_reference_image("ng"),
+            bg="#3a1c1f", fg="#ff9c9c", relief="flat", font=("맑은 고딕", 8, "bold"), pady=2, cursor="hand2"
+        )
+        self.btn_save_ng_ref.grid(row=0, column=1, sticky="ew", padx=(2, 0))
+
+        # 우측 패널 (데이터 테이블)
+        right_panel = tk.Frame(main_frame, bg=BG_MAIN)
+        right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        self.lbl_right_header = tk.Label(
+            right_panel, text="", font=("맑은 고딕", 10, "bold"), fg="#9aa0a6", bg=BG_MAIN, anchor="w"
+        )
+        self.lbl_right_header.pack(fill=tk.X, pady=(0, 6))
+
+        columns = ("Pallet", "DAY", "TIME", "Label QR", "DMC", "JUDGMENT", "Content")
+        self.tree = ttk.Treeview(right_panel, columns=columns, show="headings", style="Dark.Treeview")
+        self.tree.tag_configure("ng_row", background="#3a1c1f", foreground="#ff6b6b")
+        self.tree.tag_configure("pallet_row", background="#1e3a5f", foreground="#7dd3fc")
+
+        self.tree.heading("Pallet", text=self.t("th_pallet"))
+        self.tree.heading("DAY", text=self.t("th_day"))
+        self.tree.heading("TIME", text=self.t("th_time"))
+        self.tree.heading("Label QR", text=self.t("th_label"))
+        self.tree.heading("DMC", text=self.t("th_dmc"))
+        self.tree.heading("JUDGMENT", text=self.t("th_judgment"))
+        self.tree.heading("Content", text=self.t("th_content"))
+
+        self.tree.column("Pallet", width=170, anchor="w")
+        self.tree.column("DAY", width=80, anchor="center")
+        self.tree.column("TIME", width=70, anchor="center")
+        self.tree.column("Label QR", width=220, anchor="w")
+        self.tree.column("DMC", width=210, anchor="w")
+        self.tree.column("JUDGMENT", width=75, anchor="center")
+        self.tree.column("Content", width=95, anchor="center")
+
+        tree_scroll = ttk.Scrollbar(right_panel, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscroll=tree_scroll.set)
+
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def build_grouping_tab(self):
+        group_frame = tk.Frame(self.tab_grouping, bg=BG_MAIN)
+        group_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
+
+        header_bar = tk.Frame(group_frame, bg=BG_PANEL, pady=8, padx=15)
+        header_bar.pack(fill=tk.X, pady=(0, 10))
+
+        self.lbl_grouping_header = tk.Label(
+            header_bar, text="",
+            font=("맑은 고딕", 10, "bold"), fg="#38bdf8", bg=BG_PANEL
+        )
+        self.lbl_grouping_header.pack(side=tk.LEFT)
+
+        btn_refresh = tk.Button(
+            header_bar, text="🔄 새로고침", command=self.refresh_grouping_tab,
+            bg="#2b5278", fg="#ffffff", relief="flat", font=("맑은 고딕", 9, "bold"), padx=12, pady=2, cursor="hand2"
+        )
+        btn_refresh.pack(side=tk.RIGHT)
+
+        cols = ("Pallet", "BoxSeq", "DAY", "TIME", "Label QR", "Qty", "JUDGMENT")
+        self.tree_grouping = ttk.Treeview(group_frame, columns=cols, show="headings", style="Dark.Treeview")
+        self.tree_grouping.tag_configure("pallet_start", background="#1a365d", foreground="#93c5fd")
+        self.tree_grouping.tag_configure("pallet_done", background="#223042", foreground="#94a3b8")
+        self.tree_grouping.tag_configure("ng_box", background="#3a1c1f", foreground="#ff6b6b")
+
+        self.tree_grouping.heading("Pallet", text=self.t("th_pallet"))
+        self.tree_grouping.heading("BoxSeq", text=self.t("th_box_seq"))
+        self.tree_grouping.heading("DAY", text=self.t("th_day"))
+        self.tree_grouping.heading("TIME", text=self.t("th_time"))
+        self.tree_grouping.heading("Label QR", text=self.t("th_label"))
+        self.tree_grouping.heading("Qty", text="수량 (Qty)")
+        self.tree_grouping.heading("JUDGMENT", text=self.t("th_judgment"))
+
+        self.tree_grouping.column("Pallet", width=220, anchor="w")
+        self.tree_grouping.column("BoxSeq", width=85, anchor="center")
+        self.tree_grouping.column("DAY", width=95, anchor="center")
+        self.tree_grouping.column("TIME", width=85, anchor="center")
+        self.tree_grouping.column("Label QR", width=340, anchor="w")
+        self.tree_grouping.column("Qty", width=90, anchor="center")
+        self.tree_grouping.column("JUDGMENT", width=85, anchor="center")
+
+        scroll_g = ttk.Scrollbar(group_frame, orient=tk.VERTICAL, command=self.tree_grouping.yview)
+        self.tree_grouping.configure(yscroll=scroll_g.set)
+
+        self.tree_grouping.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll_g.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def refresh_grouping_tab(self):
+        self.tree_grouping.delete(*self.tree_grouping.get_children())
+        curr_model = self.current_model.get()
+        files = self.get_all_model_files(curr_model)
+        if not files:
             return
 
-        # 좌측 상태 패널
-        left = tk.Frame(self.body, bg=PANEL, width=320)
-        left.pack(side="left", fill="y", padx=(0, 14))
-        left.pack_propagate(False)
+        def _loader():
+            group_rows = []
+            current_pallet_code = ""
+            box_seq_tracker = 0
 
-        code = MODELS[model]
-        tk.Label(left, text=f"모델 {model}\n인식코드 {code}", bg=PANEL, fg=AMBER,
-                 font=(MONO, 10, "bold"), justify="left").pack(anchor="w", padx=16, pady=(16, 10))
+            for filepath in files:
+                unhide_file(filepath)
+                wb = openpyxl.load_workbook(filepath, data_only=True)
+                ws = wb["스캔실적"] if "스캔실적" in wb.sheetnames else wb.active
 
-        self.result_label = tk.Label(left, text="—", bg=PANEL2, fg="#4a5158",
-                                      font=(MONO, 40, "bold"), width=8, height=3)
-        self.result_label.pack(padx=16, pady=6)
+                for row in ws.iter_rows(min_row=2, values_only=True):
+                    if not row or len(row) < 7:
+                        continue
 
-        self.last_scan_label = tk.Label(left, text="스캔 대기 중...", bg=PANEL, fg=TEXT_DIM,
-                                         font=(MONO, 9), wraplength=280, justify="left")
-        self.last_scan_label.pack(anchor="w", padx=16, pady=(2, 10))
+                    if len(row) >= 8:
+                        p_val = str(row[0]).strip().upper() if row[0] and str(row[0]).strip() != "-" else ""
+                        lbl_val = str(row[1]).strip() if row[1] and str(row[1]).strip() != "-" else ""
+                        box_time = str(row[2]).strip() if row[2] and str(row[2]).strip() != "-" else ""
+                        seq_val = str(row[3]).strip() if row[3] else ""
+                        desc_val = str(row[4]).strip() if row[4] else ""
+                        res_val = str(row[6]).strip() if row[6] else "OK"
+                    else:
+                        p_val = ""
+                        lbl_val = str(row[0]).strip() if row[0] and str(row[0]).strip() != "-" else ""
+                        box_time = str(row[1]).strip() if row[1] and str(row[1]).strip() != "-" else ""
+                        seq_val = str(row[2]).strip() if row[2] else ""
+                        desc_val = str(row[3]).strip() if row[3] else ""
+                        res_val = str(row[5]).strip() if row[5] else "OK"
 
-        tk.Label(left, text="바코드 스캔 입력 (포커스 유지)", bg=PANEL, fg=TEXT_DIM,
-                 font=(MONO, 9)).pack(anchor="w", padx=16)
-        self.scan_entry = tk.Entry(left, bg=PANEL2, fg=TEXT, insertbackground=TEXT,
-                                    font=(MONO, 12), relief="flat")
-        self.scan_entry.pack(fill="x", padx=16, pady=(2, 14), ipady=4)
-        self.scan_entry.bind("<Return>", self.on_scan_enter)
+                    if seq_val == "Final HEADER" and "Start" in desc_val:
+                        current_pallet_code = p_val
+                        box_seq_tracker = 0
+                        t_parts = box_time.split()
+                        d_str = t_parts[0] if len(t_parts) > 0 else ""
+                        tm_str = t_parts[1] if len(t_parts) > 1 else ""
+                        group_rows.append((p_val, "-", d_str, tm_str, "[Pallet Grouping Start]", "-", "START", "pallet_start"))
+                        continue
+
+                    if seq_val == "Final HEADER" and "Done" in desc_val:
+                        t_parts = box_time.split()
+                        d_str = t_parts[0] if len(t_parts) > 0 else ""
+                        tm_str = t_parts[1] if len(t_parts) > 1 else ""
+                        group_rows.append((p_val, "-", d_str, tm_str, "[Pallet Grouping Done]", f"{box_seq_tracker} 박스", "DONE", "pallet_done"))
+                        box_seq_tracker = 0
+                        continue
+
+                    if seq_val == "HEADER" or "Group" in desc_val or "Box" in desc_val:
+                        box_seq_tracker += 1
+                        t_parts = box_time.split()
+                        d_str = t_parts[0] if len(t_parts) > 0 else ""
+                        tm_str = t_parts[1] if len(t_parts) > 1 else ""
+
+                        qty_str = "10"
+                        if "Done:" in desc_val:
+                            try:
+                                qty_str = desc_val.split("Done:")[1].split("pcs")[0].strip()
+                            except Exception:
+                                qty_str = "10"
+
+                        tag = "ng_box" if res_val == "NG" else ""
+                        effective_p = p_val if p_val else current_pallet_code
+                        group_rows.append((effective_p, f"#{box_seq_tracker}", d_str, tm_str, lbl_val, f"{qty_str} pcs", res_val, tag))
+
+                hide_file(filepath)
+
+            def _populate():
+                for r in reversed(group_rows):
+                    tag = r[7]
+                    self.tree_grouping.insert("", tk.END, values=r[:7], tags=(tag,) if tag else ())
+
+            self.root.after(0, _populate)
+
+        threading.Thread(target=_loader, daemon=True).start()
+
+    def build_recode_tab(self):
+        recode_frame = tk.Frame(self.tab_recode, bg=BG_MAIN)
+        recode_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        filter_bar = tk.Frame(recode_frame, bg=BG_PANEL, pady=8, padx=15)
+        filter_bar.pack(fill=tk.X, pady=(0, 10))
+
+        today_str = datetime.now().strftime("%Y-%m-%d")
+
+        self.lbl_filter_day = tk.Label(filter_bar, text=self.t("filter_day"), font=("맑은 고딕", 9, "bold"), fg=TEXT_COLOR, bg=BG_PANEL)
+        self.lbl_filter_day.pack(side=tk.LEFT)
+        self.entry_start_day = tk.Entry(filter_bar, width=11, font=("맑은 고딕", 9), justify="center", bg=BG_INPUT, fg="#ffffff")
+        self.entry_start_day.insert(0, today_str)
+        self.entry_start_day.pack(side=tk.LEFT, padx=5)
+
+        tk.Label(filter_bar, text="~", fg=TEXT_MUTED, bg=BG_PANEL).pack(side=tk.LEFT)
+        self.entry_end_day = tk.Entry(filter_bar, width=11, font=("맑은 고딕", 9), justify="center", bg=BG_INPUT, fg="#ffffff")
+        self.entry_end_day.insert(0, today_str)
+        self.entry_end_day.pack(side=tk.LEFT, padx=5)
+
+        self.lbl_filter_time = tk.Label(filter_bar, text=self.t("filter_time"), font=("맑은 고딕", 9, "bold"), fg=TEXT_COLOR, bg=BG_PANEL)
+        self.lbl_filter_time.pack(side=tk.LEFT, padx=(15, 0))
+        self.entry_start_time = tk.Entry(filter_bar, width=9, font=("맑은 고딕", 9), justify="center", bg=BG_INPUT, fg="#ffffff")
+        self.entry_start_time.insert(0, "00:00:00")
+        self.entry_start_time.pack(side=tk.LEFT, padx=5)
+
+        tk.Label(filter_bar, text="~", fg=TEXT_MUTED, bg=BG_PANEL).pack(side=tk.LEFT)
+        self.entry_end_time = tk.Entry(filter_bar, width=9, font=("맑은 고딕", 9), justify="center", bg=BG_INPUT, fg="#ffffff")
+        self.entry_end_time.insert(0, "23:59:59")
+        self.entry_end_time.pack(side=tk.LEFT, padx=5)
+
+        self.btn_search = tk.Button(
+            filter_bar, text=self.t("search_btn"), command=self.apply_recode_filter,
+            bg="#2b5278", fg="#ffffff", relief="flat", font=("맑은 고딕", 9, "bold"), padx=12, pady=2, cursor="hand2"
+        )
+        self.btn_search.pack(side=tk.LEFT, padx=15)
+
+        self.btn_save = tk.Button(
+            filter_bar, text=self.t("save_btn"), command=self.save_recode_to_excel,
+            bg="#198754", fg="#ffffff", relief="flat", font=("맑은 고딕", 9, "bold"), padx=12, pady=2, cursor="hand2"
+        )
+        self.btn_save.pack(side=tk.RIGHT)
+
+        cols = ("Pallet", "DAY", "TIME", "Label QR", "DMC", "JUDGMENT", "Content")
+        self.tree_recode = ttk.Treeview(recode_frame, columns=cols, show="headings", style="Dark.Treeview")
+        self.tree_recode.tag_configure("ng_row", background="#3a1c1f", foreground="#ff6b6b")
+        self.tree_recode.tag_configure("pallet_row", background="#1e3a5f", foreground="#7dd3fc")
+
+        self.tree_recode.heading("Pallet", text=self.t("th_pallet"))
+        self.tree_recode.heading("DAY", text=self.t("th_day"))
+        self.tree_recode.heading("TIME", text=self.t("th_time"))
+        self.tree_recode.heading("Label QR", text=self.t("th_label"))
+        self.tree_recode.heading("DMC", text=self.t("th_dmc"))
+        self.tree_recode.heading("JUDGMENT", text=self.t("th_judgment"))
+        self.tree_recode.heading("Content", text=self.t("th_content"))
+
+        self.tree_recode.column("Pallet", width=170, anchor="w")
+        self.tree_recode.column("DAY", width=80, anchor="center")
+        self.tree_recode.column("TIME", width=70, anchor="center")
+        self.tree_recode.column("Label QR", width=220, anchor="w")
+        self.tree_recode.column("DMC", width=210, anchor="w")
+        self.tree_recode.column("JUDGMENT", width=75, anchor="center")
+        self.tree_recode.column("Content", width=95, anchor="center")
+
+        tree_scroll = ttk.Scrollbar(recode_frame, orient=tk.VERTICAL, command=self.tree_recode.yview)
+        self.tree_recode.configure(yscroll=tree_scroll.set)
+
+        self.tree_recode.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll_r.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def on_language_changed(self, event=None):
+        self.notebook.tab(0, text=self.t("tab_scan"))
+        self.notebook.tab(1, text=self.t("tab_grouping"))
+        self.notebook.tab(2, text=self.t("tab_recode"))
+
+        self.btn_pw.config(text=self.t("pw_setting"))
+        self.btn_reset.config(text=self.t("reset_btn"))
+        if self.is_manager_mode:
+            self.btn_manager.config(text=self.t("manager_btn_on"))
+        else:
+            self.btn_manager.config(text=self.t("manager_btn"))
+
+        self.lbl_input_guide.config(text=self.t("input_guide"))
+        model = self.current_model.get()
+        target_code = MODEL_CONFIG[model]
+        self.lbl_model_info.config(text=f"{self.t('model_label')} {model}\n{self.t('code_label')} {target_code}")
+        self.lbl_right_header.config(text=self.t("record_header", model=model))
+        self.lbl_grouping_header.config(text=self.t("grouping_header", model=model))
+        self.lbl_pending_status.config(text=self.t("pending_status", count=len(self.pending_items)))
+        self.update_pallet_status_ui()
+
+        for tree_obj in (self.tree, self.tree_recode):
+            tree_obj.heading("Pallet", text=self.t("th_pallet"))
+            tree_obj.heading("DAY", text=self.t("th_day"))
+            tree_obj.heading("TIME", text=self.t("th_time"))
+            tree_obj.heading("Label QR", text=self.t("th_label"))
+            tree_obj.heading("DMC", text=self.t("th_dmc"))
+            tree_obj.heading("JUDGMENT", text=self.t("th_judgment"))
+            tree_obj.heading("Content", text=self.t("th_content"))
+
+        self.tree_grouping.heading("Pallet", text=self.t("th_pallet"))
+        self.tree_grouping.heading("BoxSeq", text=self.t("th_box_seq"))
+        self.tree_grouping.heading("DAY", text=self.t("th_day"))
+        self.tree_grouping.heading("TIME", text=self.t("th_time"))
+        self.tree_grouping.heading("Label QR", text=self.t("th_label"))
+        self.tree_grouping.heading("JUDGMENT", text=self.t("th_judgment"))
+
+        self.lbl_filter_day.config(text=self.t("filter_day"))
+        self.lbl_filter_time.config(text=self.t("filter_time"))
+        self.btn_search.config(text=self.t("search_btn"))
+        self.btn_save.config(text=self.t("save_btn"))
+
+        self.lbl_camera_title.config(text=self.t("camera_panel_title"))
+        self.btn_roi_set.config(text=self.t("btn_roi_set_on") if self.roi_select_mode else self.t("btn_roi_set"))
+        self.btn_save_ok_ref.config(text=self.t("btn_save_ok_ref"))
+        self.btn_save_ng_ref.config(text=self.t("btn_save_ng_ref"))
+
         self.scan_entry.focus_set()
 
-        stats = tk.Frame(left, bg=PANEL)
-        stats.pack(fill="x", padx=16)
-        self.stat_total = self._stat_box(stats, "TOTAL", TEXT)
-        self.stat_ok = self._stat_box(stats, "OK", OK_C)
-        self.stat_ng = self._stat_box(stats, "NG", NG_C)
+    def update_pallet_status_ui(self):
+        m = self.current_model.get()
+        info = self.pallet_state.get(m, {"current_pallet": "", "box_count": 0})
+        p_name = info["current_pallet"] if info["current_pallet"] else "-"
+        b_cnt = info["box_count"]
+        self.lbl_pallet_status.config(text=self.t("pallet_status", pallet=p_name, boxes=b_cnt, max_b=MAX_BOXES_PER_PALLET))
 
-        self.open_hint = tk.Label(left, text="", bg=PANEL, fg=TEXT_DIM, font=(MONO, 8),
-                                   wraplength=280, justify="left")
-        self.open_hint.pack(anchor="w", padx=16, pady=(10, 16))
-
-        # 우측 기록 테이블
-        right = tk.Frame(self.body, bg=PANEL)
-        right.pack(side="left", fill="both", expand=True)
-
-        head = tk.Frame(right, bg=PANEL)
-        head.pack(fill="x", padx=16, pady=(16, 6))
-        tk.Label(head, text=f"{model} 기록   (저장 파일: {model}.xlsx)", bg=PANEL, fg=TEXT_DIM,
-                 font=(MONO, 10)).pack(side="left")
-
-        columns = ("day", "time", "label", "dmc", "result")
-        self.tree = ttk.Treeview(right, columns=columns, show="headings", height=20)
-        widths = {"day": 90, "time": 70, "label": 380, "dmc": 200, "result": 70}
-        headers = {"day": "DAY", "time": "TIME", "label": "Label QR", "dmc": "DMC", "result": "RESULT"}
-        for c in columns:
-            self.tree.heading(c, text=headers[c])
-            self.tree.column(c, width=widths[c], anchor="w")
-        self.tree.tag_configure("ok", foreground=OK_C)
-        self.tree.tag_configure("ng", foreground=NG_C)
-        self.tree.pack(fill="both", expand=True, padx=16, pady=(0, 16))
-
-        self.records = load_records(model)
-        self.refresh_view()
-
-    def _stat_box(self, parent, label, color):
-        box = tk.Frame(parent, bg=PANEL2)
-        box.pack(side="left", expand=True, fill="x", padx=3)
-        n = tk.Label(box, text="0", bg=PANEL2, fg=color, font=(MONO, 16, "bold"))
-        n.pack(pady=(8, 0))
-        tk.Label(box, text=label, bg=PANEL2, fg=TEXT_DIM, font=(MONO, 8)).pack(pady=(0, 8))
-        return n
-
-    def on_model_change(self, event=None):
-        self.locked = False
-        self.render_body()
-
-    def refresh_view(self):
-        self.tree.delete(*self.tree.get_children())
-        groups = compute_groups(self.records)
-        for g in groups:
-            for i, it in enumerate(g["items"]):
-                label_disp = g["label"] if i == 0 else ""
-                tag = "ok" if it["result"] == "OK" else "ng"
-                self.tree.insert("", "end",
-                                  values=(it["day"], it["time"], label_disp, it["dmc"], it["result"]),
-                                  tags=(tag,))
-        children = self.tree.get_children()
-        if children:
-            self.tree.see(children[-1])
-
-        total = len(self.records)
-        ok = sum(1 for r in self.records if r["result"] == "OK")
-        ng = total - ok
-        open_cnt = sum(1 for r in self.records if not r["label"])
-        self.stat_total.config(text=str(total))
-        self.stat_ok.config(text=str(ok))
-        self.stat_ng.config(text=str(ng))
-        self.open_hint.config(text=f"미그룹 스캔 {open_cnt}건 — Label QR 대기 중" if open_cnt else "")
-
-    def on_scan_enter(self, event=None):
-        if self.locked:
+    def on_entry_key_release(self, event):
+        if event.keysym in ("Return", "KP_Enter"):
+            if self.auto_submit_timer:
+                self.root.after_cancel(self.auto_submit_timer)
+                self.auto_submit_timer = None
             return
-        value = self.scan_entry.get().strip()
-        self.scan_entry.delete(0, "end")
-        if not value:
+
+        text = self.scan_entry.get().strip()
+        if len(text) >= 10:
+            if self.auto_submit_timer:
+                self.root.after_cancel(self.auto_submit_timer)
+            self.auto_submit_timer = self.root.after(150, self._trigger_auto_submit_entry)
+
+    def _trigger_auto_submit_entry(self):
+        text = self.scan_entry.get().strip()
+        if text:
+            self.process_scan(text)
+
+    def setup_global_key_listener(self):
+        def _on_key_press(event):
+            focused = self.root.focus_get()
+            if isinstance(focused, tk.Entry) and focused != self.scan_entry:
+                return
+
+            if event.keysym in ("Return", "KP_Enter"):
+                if self.auto_submit_timer:
+                    self.root.after_cancel(self.auto_submit_timer)
+                    self.auto_submit_timer = None
+
+                if self.global_scan_buffer:
+                    scanned_text = "".join(self.global_scan_buffer).strip()
+                    self.global_scan_buffer.clear()
+                    self.scan_entry.delete(0, tk.END)
+                    if scanned_text:
+                        self.process_scan(scanned_text)
+            elif event.char and event.char.isprintable():
+                self.global_scan_buffer.append(event.char)
+                if len(self.global_scan_buffer) >= 10:
+                    if self.auto_submit_timer:
+                        self.root.after_cancel(self.auto_submit_timer)
+                    self.auto_submit_timer = self.root.after(150, self._trigger_auto_submit_global)
+
+        self.root.bind_all("<Key>", _on_key_press)
+
+    def _trigger_auto_submit_global(self):
+        if self.global_scan_buffer:
+            scanned_text = "".join(self.global_scan_buffer).strip()
+            self.global_scan_buffer.clear()
+            self.scan_entry.delete(0, tk.END)
+            if scanned_text:
+                self.process_scan(scanned_text)
+
+    def set_status(self, text, fg_color, bg_color):
+        if len(text) <= 2:
+            font_size = 46
+        elif len(text) <= 7:
+            font_size = 36
+        elif len(text) <= 12:
+            font_size = 28
+        else:
+            font_size = 22
+
+        self.status_box.config(text=text, fg=fg_color, bg=bg_color, font=("Arial", font_size, "bold"))
+
+    def center_popup(self, dialog, width, height):
+        self.root.update_idletasks()
+        rx = self.root.winfo_x()
+        ry = self.root.winfo_y()
+        rw = self.root.winfo_width()
+        rh = self.root.winfo_height()
+
+        x = rx + (rw - width) // 2
+        y = ry + (rh - height) // 2
+        dialog.geometry(f"{width}x{height}+{max(0, x)}+{max(0, y)}")
+
+    def toggle_manager_mode(self):
+        if self.active_popup or self.pallet_wait_popup:
             return
-        self.process_scan(value)
 
-    def process_scan(self, value):
-        model = self.model_var.get()
-        code = MODELS[model]
-        fields = value.split(";")
-        is_label = len(fields) > 2
-        prefix10 = value[:10].upper()
-        match = prefix10 == code
-        result = "OK" if match else "NG"
-        now = datetime.now()
-        day = now.strftime("%Y-%m-%d")
-        time_ = now.strftime("%H:%M:%S")
+        win = tk.Toplevel(self.root)
+        win.configure(bg=BG_PANEL)
+        win.transient(self.root)
+        win.grab_set()
 
-        if is_label:
-            if match:
-                for r in self.records:
-                    if not r["label"]:
-                        r["label"] = value
-                save_records(model, self.records)
-                self.refresh_view()
+        self.center_popup(win, 360, 210)
+
+        target_state = not self.is_manager_mode
+        if target_state:
+            win.title(self.t("manager_btn") + " ON")
+            msg_text = "MANAGER MODE [ON]\n" + ("관리자 비밀번호를 입력하세요." if self.current_lang.get()=="한국어" else "Enter Admin Password.")
         else:
-            self.records.append({"day": day, "time": time_, "label": "", "dmc": value, "result": result})
-            save_records(model, self.records)
-            self.refresh_view()
+            win.title(self.t("manager_btn") + " OFF")
+            msg_text = "MANAGER MODE [OFF]\n" + ("관리자 비밀번호를 입력하세요." if self.current_lang.get()=="한국어" else "Enter Admin Password.")
 
-        self.last_scan_label.config(text=f"마지막 스캔: {value}")
-        if result == "OK":
-            self.result_label.config(text="OK", bg=OK_BG, fg=OK_C)
-        else:
-            self.result_label.config(text="NG", bg=NG_BG, fg=NG_C)
+        tk.Label(win, text=msg_text, font=("맑은 고딕", 10, "bold"), fg=TEXT_COLOR, bg=BG_PANEL).pack(pady=(15, 8))
 
-        if result == "NG":
-            self.lock()
+        pw_entry = tk.Entry(win, show="*", font=("Arial", 14), justify="center", bg=BG_INPUT, fg="#ffffff")
+        pw_entry.pack(pady=5)
+        pw_entry.focus_set()
 
-    def lock(self):
-        self.locked = True
-        self.scan_entry.config(state="disabled")
-        self.open_password_dialog()
+        lbl_err = tk.Label(win, text="", font=("맑은 고딕", 9), fg="#ff6b6b", bg=BG_PANEL)
+        lbl_err.pack()
 
-    def open_password_dialog(self):
-        dlg = tk.Toplevel(self.root)
-        dlg.title("NG - 비밀번호 입력")
-        dlg.configure(bg=PANEL)
-        dlg.geometry("300x230")
-        dlg.resizable(False, False)
-        dlg.transient(self.root)
-        dlg.grab_set()
-        dlg.protocol("WM_DELETE_WINDOW", lambda: None)
-
-        tk.Label(dlg, text="NG", bg=PANEL, fg=NG_C, font=(MONO, 26, "bold")).pack(pady=(18, 4))
-        tk.Label(dlg, text="인식 코드가 일치하지 않습니다.\n비밀번호 6자리를 입력하세요.",
-                 bg=PANEL, fg=TEXT_DIM, font=(MONO, 9), justify="center").pack(pady=(0, 10))
-
-        pw_var = tk.StringVar()
-        entry = tk.Entry(dlg, textvariable=pw_var, show="●", justify="center",
-                          font=(MONO, 16), bg=PANEL2, fg=TEXT, relief="flat")
-        entry.pack(pady=4, ipady=4, padx=30, fill="x")
-        entry.focus_set()
-
-        err = tk.Label(dlg, text="", bg=PANEL, fg=NG_C, font=(MONO, 9))
-        err.pack(pady=4)
-
-        def try_unlock(event=None):
-            if pw_var.get() == self.config_data.get("password", DEFAULT_PASSWORD):
-                self.locked = False
-                self.scan_entry.config(state="normal")
-                dlg.grab_release()
-                dlg.destroy()
+        def verify(event=None):
+            if pw_entry.get() == self.admin_password:
+                self.is_manager_mode = target_state
+                if self.is_manager_mode:
+                    self.btn_manager.config(bg="#28a745", fg="#ffffff", text=self.t("manager_btn_on"))
+                else:
+                    self.btn_manager.config(bg="#2c323d", fg="#adb5bd", text=self.t("manager_btn"))
+                win.destroy()
                 self.scan_entry.focus_set()
             else:
-                err.config(text="비밀번호가 올바르지 않습니다")
-                pw_var.set("")
+                lbl_err.config(text=self.t("pw_err"))
+                pw_entry.delete(0, tk.END)
 
-        entry.bind("<Return>", try_unlock)
-        tk.Button(dlg, text="확인", command=try_unlock, bg=NG_C, fg="white",
-                  relief="flat", padx=10, pady=6).pack(pady=8)
+        pw_entry.bind("<Return>", verify)
+        tk.Button(win, text=self.t("unlock_btn"), command=verify, bg="#28a745" if target_state else "#dc3545", fg="#ffffff",
+                  relief="flat", font=("맑은 고딕", 10, "bold"), padx=15, pady=3).pack(pady=10)
 
-    def open_settings(self):
-        dlg = tk.Toplevel(self.root)
-        dlg.title("비밀번호 설정")
-        dlg.configure(bg=PANEL)
-        dlg.geometry("300x360")
-        dlg.resizable(False, False)
-        dlg.transient(self.root)
-        dlg.grab_set()
+    def auto_turn_off_manager_mode(self):
+        self.is_manager_mode = False
+        self.btn_manager.config(bg="#2c323d", fg="#adb5bd", text=self.t("manager_btn"))
 
-        tk.Label(dlg, text="비밀번호 설정", bg=PANEL, fg=TEXT, font=(MONO, 12, "bold")).pack(pady=(16, 10))
+    def open_sorting_popup(self, dmc_code):
+        dialog = tk.Toplevel(self.root)
+        dialog.title(self.t("sorting_title"))
+        dialog.resizable(False, False)
+        dialog.configure(bg="#3a1c1f")
 
-        def labeled_entry(text):
-            tk.Label(dlg, text=text, bg=PANEL, fg=TEXT_DIM, font=(MONO, 9)).pack(anchor="w", padx=24)
-            var = tk.StringVar()
-            e = tk.Entry(dlg, textvariable=var, show="●", justify="center", font=(MONO, 13),
-                         bg=PANEL2, fg=TEXT, relief="flat")
-            e.pack(padx=24, pady=(2, 10), fill="x", ipady=3)
-            return var
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.protocol("WM_DELETE_WINDOW", lambda: None)
 
-        cur_var = labeled_entry("현재 비밀번호")
-        new1_var = labeled_entry("새 비밀번호 (숫자 6자리)")
-        new2_var = labeled_entry("새 비밀번호 확인")
+        self.center_popup(dialog, 520, 300)
+        self.active_popup = dialog
 
-        err = tk.Label(dlg, text="", bg=PANEL, fg=NG_C, font=(MONO, 9), wraplength=250)
-        err.pack(pady=4)
+        self.play_alarm_sound()
 
-        def save_pw():
-            cur = cur_var.get()
-            n1 = new1_var.get()
-            n2 = new2_var.get()
-            if cur != self.config_data.get("password", DEFAULT_PASSWORD):
-                err.config(fg=NG_C, text="현재 비밀번호가 올바르지 않습니다")
+        msg = self.t("sorting_msg", code=dmc_code)
+        tk.Label(dialog, text=msg, font=("맑은 고딕", 11, "bold"), bg="#3a1c1f", fg="#ff6b6b", justify=tk.LEFT).pack(pady=25, padx=20)
+
+        def close_dialog(event=None):
+            dialog.grab_release()
+            dialog.destroy()
+            self.active_popup = None
+            self.set_status("READY", "#adb5bd", "#2a2e37")
+            self.scan_entry.focus_set()
+
+        dialog.bind("<Return>", close_dialog)
+        dialog.bind("<KP_Enter>", close_dialog)
+
+        btn = tk.Button(dialog, text=self.t("confirm_btn"), command=close_dialog,
+                        font=("맑은 고딕", 11, "bold"), bg="#dc3545", fg="#ffffff",
+                        relief="flat", padx=20, pady=6, cursor="hand2")
+        btn.pack(pady=10)
+        btn.focus_set()
+
+    def open_pallet_wait_popup(self):
+        if self.pallet_wait_popup:
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title(self.t("pallet_popup_title"))
+        dialog.resizable(False, False)
+        dialog.configure(bg="#1e293b")
+
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        self.center_popup(dialog, 520, 240)
+        self.pallet_wait_popup = dialog
+
+        tk.Label(dialog, text="[12 BOX PACKING COMPLETE]", font=("맑은 고딕", 12, "bold"), fg="#38bdf8", bg="#1e293b").pack(pady=(25, 8))
+        tk.Label(dialog, text=self.t("pallet_popup_msg"), font=("맑은 고딕", 13, "bold"), fg="#f8fafc", bg="#1e293b").pack(pady=10)
+        tk.Label(dialog, text="* 새 Pallet QR을 스캔하면 자동으로 해제됩니다.", font=("맑은 고딕", 9), fg="#94a3b8", bg="#1e293b").pack(pady=5)
+
+    def close_pallet_wait_popup(self):
+        if self.pallet_wait_popup:
+            try:
+                self.pallet_wait_popup.grab_release()
+                self.pallet_wait_popup.destroy()
+            except Exception:
+                pass
+            self.pallet_wait_popup = None
+
+    def on_model_changed(self, event=None):
+        self.model_session_id += 1
+        current_session = self.model_session_id
+
+        model = self.current_model.get()
+        target_code = MODEL_CONFIG[model]
+
+        self.lbl_model_info.config(text=f"{self.t('model_label')} {model}\n{self.t('code_label')} {target_code}")
+        self.lbl_right_header.config(text=self.t("record_header", model=model))
+        self.lbl_grouping_header.config(text=self.t("grouping_header", model=model))
+        
+        self.pending_items.clear()
+        self.pending_tree_ids.clear()
+        self.lbl_pending_status.config(text=self.t("pending_status", count=0))
+        self.update_pallet_status_ui()
+
+        self.update_stat_cards()
+        self.load_history_from_excel(model, target_code, current_session)
+        self.refresh_grouping_tab()
+        self.scan_entry.focus_set()
+
+    def get_all_model_files(self, model_name):
+        safe_model = model_name.replace('-', '_')
+        pattern = os.path.join(BASE_DIR, f"Y*_*Q_{safe_model}.xlsx")
+        files = [f for f in glob.glob(pattern) if f.endswith(f"_{safe_model}.xlsx")]
+        old_file = os.path.join(BASE_DIR, f"{model_name}.xlsx")
+        if os.path.exists(old_file) and old_file not in files:
+            files.append(old_file)
+        files.sort()
+        return files
+
+    def load_history_from_excel(self, model_name, target_code, session_id):
+        self.tree.delete(*self.tree.get_children())
+        files = self.get_all_model_files(model_name)
+        if not files:
+            return
+
+        def _loader():
+            try:
+                rows_to_insert = []
+                target_upper = target_code.upper()
+                last_label = ""
+                loaded_pending = []
+                self.sorting_list_by_model[model_name].clear()
+                self.scanned_pallet_by_model[model_name].clear()
+
+                for filepath in files:
+                    unhide_file(filepath)
+                    wb = openpyxl.load_workbook(filepath, data_only=True)
+
+                    if "sorting" in wb.sheetnames:
+                        ws_sort = wb["sorting"]
+                        for r in range(2, 2001):
+                            cell_v = ws_sort.cell(row=r, column=2).value
+                            if cell_v:
+                                self.sorting_list_by_model[model_name].add(str(cell_v).strip().upper())
+
+                    if "스캔실적" in wb.sheetnames:
+                        ws = wb["스캔실적"]
+                    else:
+                        sheets = [s for s in wb.worksheets if s.title != "sorting"]
+                        ws = sheets[0] if sheets else wb.active
+
+                    for row in ws.iter_rows(min_row=2, values_only=True):
+                        if not row or len(row) < 7:
+                            continue
+                        
+                        if len(row) >= 8:
+                            pallet_val = str(row[0]).strip().upper() if row[0] and str(row[0]).strip() != "-" else ""
+                            lbl_val = row[1]
+                            box_time = row[2]
+                            seq_val = row[3]
+                            dmc_val = row[4]
+                            dmc_time = row[5]
+                            res = row[6]
+                            content = row[7] if len(row) >= 8 and row[7] else ""
+                        else:
+                            pallet_val = ""
+                            lbl_val = row[0]
+                            box_time = row[1]
+                            seq_val = row[2]
+                            dmc_val = row[3]
+                            dmc_time = row[4]
+                            res = row[5]
+                            content = row[6] if len(row) >= 7 and row[6] else ""
+
+                        lbl_str = str(lbl_val).strip() if lbl_val and str(lbl_val).strip() != "-" else ""
+                        dmc_str = str(dmc_val).strip() if dmc_val and str(dmc_val).strip() != "-" else ""
+                        res_str = str(res).strip() if res else "OK"
+                        content_str = str(content).strip() if content else ""
+
+                        if pallet_val:
+                            self.scanned_pallet_by_model[model_name].add(pallet_val)
+
+                        if seq_val == "Final HEADER":
+                            rows_to_insert.append((pallet_val, "", "", "", dmc_str, res_str, content_str))
+                            continue
+
+                        if seq_val == "HEADER" or dmc_str.startswith("[박스 묶음 완료") or "Group" in dmc_str or "Pakiet" in dmc_str:
+                            t_parts = str(box_time).split()
+                            day_val = t_parts[0] if len(t_parts) > 0 else ""
+                            time_val = t_parts[1] if len(t_parts) > 1 else ""
+                            rows_to_insert.append((pallet_val, day_val, time_val, lbl_str, dmc_str, res_str, content_str))
+                            if lbl_str:
+                                self.scanned_label_by_model[model_name].add(lbl_str)
+                            last_label = ""
+                            loaded_pending.clear()
+                            continue
+
+                        ts_str = str(dmc_time if dmc_time and str(dmc_time).strip() != "-" else box_time)
+                        if not ts_str or ts_str == "-":
+                            continue
+
+                        t_parts = ts_str.split()
+                        day_val = t_parts[0] if len(t_parts) > 0 else ""
+                        time_val = t_parts[1] if len(t_parts) > 1 else ""
+
+                        clean_dmc = dmc_str.replace("[중복스캔] ", "").replace("[중복 스캔] ", "").upper()
+                        if not clean_dmc.startswith(target_upper):
+                            continue
+
+                        if lbl_str:
+                            last_label = lbl_str
+                            final_label = lbl_str
+                        else:
+                            final_label = ""
+                            if res_str == "OK":
+                                loaded_pending.append({
+                                    "day": day_val, "time": time_val, "code": dmc_str, "result": "OK"
+                                })
+
+                        if final_label and final_label.upper().startswith(target_upper):
+                            self.scanned_label_by_model[model_name].add(final_label)
+                        if clean_dmc and clean_dmc.startswith(target_upper):
+                            self.scanned_history_by_model[model_name].add(clean_dmc)
+
+                        rows_to_insert.append((pallet_val, day_val, time_val, final_label, dmc_str, res_str, content_str))
+
+                    hide_file(filepath)
+
+                if session_id != self.model_session_id:
+                    return
+
+                def _populate():
+                    if session_id == self.model_session_id:
+                        for r in reversed(rows_to_insert):
+                            tag = ""
+                            if r[5] == "NG":
+                                tag = "ng_row"
+                            elif "Pallet" in str(r[4]):
+                                tag = "pallet_row"
+                            self.tree.insert("", tk.END, values=r, tags=(tag,) if tag else ())
+                        
+                        if loaded_pending:
+                            self.pending_items = list(loaded_pending)
+                            self.lbl_pending_status.config(text=self.t("pending_status", count=len(self.pending_items)))
+
+                self.root.after(0, _populate)
+
+            except Exception:
+                pass
+
+        threading.Thread(target=_loader, daemon=True).start()
+
+    def is_pallet_qr(self, code):
+        c = code.strip().upper()
+        if ';' in c:
+            return False
+        if c.startswith("PALLET") or c.startswith("KR02") or " " in c or "\t" in c:
+            return True
+        return False
+
+    def process_scan(self, raw_code):
+        if self.auto_submit_timer:
+            self.root.after_cancel(self.auto_submit_timer)
+            self.auto_submit_timer = None
+
+        raw_code = raw_code.strip()
+        self.scan_entry.delete(0, tk.END)
+        self.global_scan_buffer.clear()
+
+        if not raw_code:
+            return
+
+        if self.active_popup:
+            return
+
+        now = datetime.now()
+        day_str = now.strftime("%Y-%m-%d")
+        time_str = now.strftime("%H:%M:%S")
+        timestamp_full = f"{day_str} {time_str}"
+
+        curr_model = self.current_model.get()
+        target_code = MODEL_CONFIG[curr_model].upper()
+
+        # Pallet QR 스캔 처리
+        if self.is_pallet_qr(raw_code):
+            upper_pallet_code = raw_code.upper()
+
+            if target_code not in upper_pallet_code:
+                self.set_status("Pallet NG", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text=self.t("ng_pallet_model_title"),
+                    msg=self.t("ng_pallet_model_msg", model=curr_model, target=target_code, code=upper_pallet_code),
+                    header_bg="#2d1d20", header_fg="#f87171"
+                )
                 return
-            if not (n1.isdigit() and len(n1) == 6):
-                err.config(fg=NG_C, text="새 비밀번호는 숫자 6자리여야 합니다")
+
+            if len(self.pending_items) > 0:
+                self.set_status("Pallet NG", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text=self.t("ng_pallet_mid_title"),
+                    msg=self.t("ng_pallet_mid_msg", count=len(self.pending_items)),
+                    header_bg="#2d1d20", header_fg="#f87171"
+                )
                 return
-            if n1 != n2:
-                err.config(fg=NG_C, text="새 비밀번호가 일치하지 않습니다")
+
+            prev_pallet = self.pallet_state[curr_model]["current_pallet"]
+            curr_box_count = self.pallet_state[curr_model]["box_count"]
+
+            if (prev_pallet and curr_box_count == 0) or (upper_pallet_code in self.scanned_pallet_by_model[curr_model]):
+                self.set_status("Pallet NG", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text=self.t("ng_pallet_dup_title"),
+                    msg=self.t("ng_pallet_dup_msg"),
+                    header_bg="#2d1d20", header_fg="#f87171"
+                )
                 return
-            self.config_data["password"] = n1
-            save_config(self.config_data)
-            err.config(fg=OK_C, text="저장되었습니다")
 
-        tk.Button(dlg, text="저장", command=save_pw, bg=AMBER, fg="#241a05",
-                  relief="flat", padx=10, pady=6).pack(pady=8)
-        tk.Button(dlg, text="닫기", command=dlg.destroy, bg=PANEL2, fg=TEXT_DIM,
-                  relief="flat", padx=10, pady=6).pack()
+            if prev_pallet and curr_box_count >= 1:
+                self.direct_append_pallet_header(curr_model, prev_pallet, "Final HEADER", "[Pallet Grouping Done]", timestamp_full)
+                self.tree.insert("", 0, values=(prev_pallet, "", "", "", "[Pallet Grouping Done]", "OK", ""), tags=("pallet_row",))
 
+            self.pallet_state[curr_model]["current_pallet"] = upper_pallet_code
+            self.pallet_state[curr_model]["box_count"] = 0
+            self.scanned_pallet_by_model[curr_model].add(upper_pallet_code)
+            self.save_pallet_state()
+            self.update_pallet_status_ui()
 
-def main():
-    root = tk.Tk()
-    ScanStationApp(root)
-    root.mainloop()
+            self.direct_append_pallet_header(curr_model, upper_pallet_code, "Final HEADER", "[Pallet Grouping Start]", timestamp_full)
+            self.tree.insert("", 0, values=(upper_pallet_code, "", "", "", "[Pallet Grouping Start]", "OK", ""), tags=("pallet_row",))
+
+            self.close_pallet_wait_popup()
+            self.refresh_grouping_tab()
+            self.set_status("OK", "#28a745", "#193322")
+            return
+
+        # 일반 바코드 (단품 및 Label QR) 처리
+        current_time = time.time()
+        if raw_code == self.last_scanned_code and (current_time - self.last_scanned_time) < 2.0:
+            return
+
+        self.last_scanned_code = raw_code
+        self.last_scanned_time = current_time
+
+        scanned_prefix = raw_code[:10].upper()
+        clean_upper_code = raw_code.upper()
+        is_label_qr = (raw_code.count(';') >= 3)
+        self.lbl_last_scan.config(text=f"{self.t('last_scan')}: {raw_code}")
+
+        # [검증 1] 모델 코드 불일치 NG
+        if scanned_prefix != target_code:
+            self.set_status("NG", "#dc3545", "#3a1c1f")
+            self.open_lock_popup(
+                title_text=self.t("ng_model_title"),
+                msg=self.t("ng_model_msg", model=curr_model, target=target_code, code=raw_code[:12]),
+                header_bg="#2d1d20", header_fg="#f87171"
+            )
+            return
+
+        # [검증 2] Sorting 필요 제품 체크 (C열 OK 마킹 및 팝업)
+        if not is_label_qr and clean_upper_code in self.sorting_list_by_model[curr_model]:
+            self.set_status("SORTING", "#f59f00", "#3d2716")
+            self.direct_mark_sorting_ok(curr_model, raw_code)
+            self.open_sorting_popup(raw_code)
+            return
+
+        # [검증 3] Label QR 전용 검증 (+ 비전 판정 실행)
+        if is_label_qr:
+            curr_box_cnt = self.pallet_state[curr_model]["box_count"]
+
+            if curr_box_cnt >= MAX_BOXES_PER_PALLET:
+                self.set_status("Pallet NG", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text=self.t("ng_pallet_limit_title"),
+                    msg=self.t("ng_pallet_limit_msg"),
+                    header_bg="#2d1d20", header_fg="#f87171"
+                )
+                return
+
+            if raw_code in self.scanned_label_by_model[curr_model]:
+                self.set_status("Label QR NG", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text=self.t("ng_label_dup_title"),
+                    msg=self.t("ng_label_dup_msg", code=raw_code[:35]),
+                    header_bg="#2d1d20", header_fg="#f87171"
+                )
+                return
+
+            tokens = raw_code.split(';')
+            expected_qty = None
+            if len(tokens) >= 2 and tokens[1].isdigit():
+                expected_qty = int(tokens[1])
+
+            current_scanned_qty = len(self.pending_items)
+
+            if expected_qty is not None and expected_qty != current_scanned_qty:
+                self.set_status("Grouping NG", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text=self.t("ng_group_title"),
+                    msg=self.t("ng_group_msg", expected=expected_qty, current=current_scanned_qty),
+                    header_bg="#2d1d20", header_fg="#f87171"
+                )
+                return
+
+            # [핵심] 홈캠 기반 적재 방향 자동 판정
+            is_ok, detail = self.judge_box_orientation()
+            self.last_orientation_detail = detail
+            self.last_orientation_status = "OK" if is_ok else ("SKIP" if is_ok is None else "NG")
+
+            if is_ok is False:
+                self.set_status("방향 NG", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text=self.t("ng_orientation_title"),
+                    msg=self.t("ng_orientation_msg", detail=detail),
+                    header_bg="#2d1d20", header_fg="#f87171"
+                )
+                return
+
+        # [검증 4] 단품 QR 전용 체크
+        if not is_label_qr:
+            if len(self.pending_items) >= MAX_ITEMS_PER_BOX:
+                self.set_status("NG", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text=self.t("ng_limit_title"),
+                    msg=self.t("ng_limit_msg", max_cnt=MAX_ITEMS_PER_BOX),
+                    header_bg="#2d1d20", header_fg="#f87171"
+                )
+                return
+
+            is_already_scanned = (clean_upper_code in self.scanned_history_by_model[curr_model])
+
+            if self.is_manager_mode:
+                if not is_already_scanned:
+                    self.set_status("NG", "#dc3545", "#3a1c1f")
+                    self.open_lock_popup(
+                        title_text=self.t("ng_mgr_err_title"),
+                        msg=self.t("ng_mgr_err_msg", code=raw_code),
+                        header_bg="#2d1d20", header_fg="#f87171"
+                    )
+                    return
+                else:
+                    self.set_status("OK", "#28a745", "#193322")
+                    cur_p = self.pallet_state[curr_model]["current_pallet"]
+                    item_data = {
+                        "pallet": cur_p,
+                        "day": day_str,
+                        "time": time_str,
+                        "code": raw_code,
+                        "result": "OK"
+                    }
+                    self.tree.insert("", 0, values=(cur_p, day_str, time_str, "", raw_code, "OK", ""))
+                    self.direct_append_single_item(curr_model, item_data)
+                    self.auto_turn_off_manager_mode()
+                    return
+
+            else:
+                if is_already_scanned:
+                    self.model_counts[curr_model]["ng"] += 1
+                    self.model_counts[curr_model]["total"] += 1
+                    self.save_model_counts()
+                    self.update_stat_cards()
+
+                    self.set_status("QR NG", "#fd7e14", "#3d2716")
+
+                    cur_p = self.pallet_state[curr_model]["current_pallet"]
+                    dup_text = self.t("dup_scan_tag")
+                    self.tree.insert("", 0, values=(cur_p, day_str, time_str, "-", raw_code, "NG", dup_text), tags=("ng_row",))
+
+                    matched_label_qr = None
+                    for item_id in self.tree.get_children():
+                        vals = list(self.tree.item(item_id, "values"))
+                        if not vals:
+                            continue
+                        if vals[4].strip().upper() == clean_upper_code and vals[5] != "NG":
+                            matched_label_qr = vals[3]
+                            vals[5] = "NG"
+                            vals[6] = dup_text
+                            self.tree.item(item_id, values=vals, tags=("ng_row",))
+                            break
+
+                    if matched_label_qr and matched_label_qr != "-":
+                        for item_id in self.tree.get_children():
+                            vals = list(self.tree.item(item_id, "values"))
+                            if vals and vals[3] == matched_label_qr and ("[" in str(vals[4])):
+                                vals[5] = "NG"
+                                self.tree.item(item_id, values=vals, tags=("ng_row",))
+                                break
+
+                    self.direct_handle_dmc_duplicate(curr_model, raw_code, day_str, time_str, matched_label_qr, dup_text, cur_p)
+
+                    self.open_lock_popup(
+                        title_text=self.t("ng_dup_title"),
+                        msg=self.t("ng_dup_msg", code=raw_code),
+                        header_bg="#352316", header_fg="#fb923c"
+                    )
+                    return
+
+        self.set_status("OK", "#28a745", "#193322")
+        cur_pallet = self.pallet_state[curr_model]["current_pallet"]
+
+        if not is_label_qr:
+            self.model_counts[curr_model]["ok"] += 1
+            self.model_counts[curr_model]["total"] += 1
+            self.save_model_counts()
+            self.update_stat_cards()
+
+            self.scanned_history_by_model[curr_model].add(clean_upper_code)
+            item_data = {
+                "pallet": cur_pallet,
+                "day": day_str,
+                "time": time_str,
+                "code": raw_code,
+                "result": "OK"
+            }
+            self.pending_items.append(item_data)
+            
+            item_id = self.tree.insert("", 0, values=(cur_pallet, day_str, time_str, "", raw_code, "OK", ""))
+            self.pending_tree_ids.append(item_id)
+            self.lbl_pending_status.config(text=self.t("pending_status", count=len(self.pending_items)))
+
+            self.direct_append_single_item(curr_model, item_data)
+
+        else:
+            self.scanned_label_by_model[curr_model].add(raw_code)
+
+            for t_id in self.pending_tree_ids:
+                curr_vals = self.tree.item(t_id, "values")
+                if curr_vals:
+                    self.tree.item(t_id, values=(cur_pallet, curr_vals[1], curr_vals[2], raw_code, curr_vals[4], curr_vals[5], curr_vals[6]))
+
+            items_to_bundle = list(self.pending_items)
+            bundle_count = len(items_to_bundle)
+            header_text = self.t("box_complete", count=bundle_count)
+
+            self.tree.insert("", 0, values=(cur_pallet, day_str, time_str, raw_code, header_text, "OK", ""))
+
+            self.pending_items.clear()
+            self.pending_tree_ids.clear()
+            self.lbl_pending_status.config(text=self.t("pending_status", count=0))
+
+            self.pallet_state[curr_model]["box_count"] += 1
+            self.save_pallet_state()
+            self.update_pallet_status_ui()
+
+            self.root.update_idletasks()
+
+            if getattr(self, "last_orientation_status", "") == "OK":
+                orientation_note = f"[적재방향 OK] {self.last_orientation_detail}"
+            elif getattr(self, "last_orientation_status", "") == "SKIP":
+                orientation_note = f"[적재방향 미검사: {self.last_orientation_detail}]"
+            else:
+                orientation_note = ""
+
+            self.direct_finalize_excel_group(curr_model, cur_pallet, raw_code, timestamp_full, items_to_bundle, header_text, extra_content=orientation_note)
+            self.refresh_grouping_tab()
+
+            if self.pallet_state[curr_model]["box_count"] >= MAX_BOXES_PER_PALLET:
+                self.open_pallet_wait_popup()
+
+        self.scan_entry.focus_set()
+
+    # ==========================================
+    # 6. 엑셀 8개 열 격리 I/O
+    # ==========================================
+    def open_or_init_workbook(self, filepath):
+        unhide_file(filepath)
+        if os.path.exists(filepath):
+            try:
+                wb = openpyxl.load_workbook(filepath)
+                if "스캔실적" in wb.sheetnames:
+                    ws = wb["스캔실적"]
+                else:
+                    sheets = [s for s in wb.worksheets if s.title != "sorting"]
+                    ws = sheets[0] if sheets else wb.create_sheet(title="스캔실적", index=0)
+                
+                if ws.cell(row=1, column=1).value != "Pallet Label QR":
+                    ws.insert_cols(1)
+                    ws.cell(row=1, column=1, value="Pallet Label QR")
+                    header_fill = PatternFill(start_color="1F242D", end_color="1F242D", fill_type="solid")
+                    header_font = Font(name="맑은 고딕", size=11, bold=True, color="FFFFFF")
+                    ws.cell(row=1, column=1).fill = header_fill
+                    ws.cell(row=1, column=1).font = header_font
+                    ws.cell(row=1, column=1).alignment = Alignment(horizontal="center", vertical="center")
+                    ws.column_dimensions['A'].width = 30
+                return wb, ws
+            except Exception:
+                pass
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "스캔실적"
+
+        headers = ["Pallet Label QR", "Label QR (Box/Lot)", "Label 스캔일시", "단품 순번", "단품 DMC", "단품 스캔일시", "판정", "Content"]
+        ws.append(headers)
+
+        header_fill = PatternFill(start_color="1F242D", end_color="1F242D", fill_type="solid")
+        header_font = Font(name="맑은 고딕", size=11, bold=True, color="FFFFFF")
+
+        for col in range(1, 9):
+            cell = ws.cell(row=1, column=col)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        ws.column_dimensions['A'].width = 30
+        ws.column_dimensions['B'].width = 46
+        ws.column_dimensions['C'].width = 20
+        ws.column_dimensions['D'].width = 12
+        ws.column_dimensions['E'].width = 34
+        ws.column_dimensions['F'].width = 20
+        ws.column_dimensions['G'].width = 14
+        ws.column_dimensions['H'].width = 16
+
+        ws_sort = wb.create_sheet(title="sorting")
+        ws_sort.cell(row=1, column=2, value="Sorting 대상 DMC Code")
+        ws_sort.cell(row=1, column=3, value="판정")
+        ws_sort.column_dimensions['B'].width = 35
+        ws_sort.column_dimensions['C'].width = 12
+
+        return wb, ws
+
+    def direct_append_pallet_header(self, model_name, pallet_code, seq_val, text_val, timestamp_full):
+        with self.file_lock:
+            try:
+                filename = get_quarter_filename(model_name)
+                filepath = os.path.join(BASE_DIR, filename)
+                wb, ws = self.open_or_init_workbook(filepath)
+
+                thin_border = Border(
+                    left=Side(style='thin', color='D9D9D9'), right=Side(style='thin', color='D9D9D9'),
+                    top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9')
+                )
+                start_fill = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
+                done_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+
+                fill_to_use = start_fill if "Start" in text_val else done_fill
+                row_data = [pallet_code, "-", "-", seq_val, text_val, timestamp_full, "OK", ""]
+                ws.append(row_data)
+                h_idx = ws.max_row
+                for col in range(1, 9):
+                    c = ws.cell(row=h_idx, column=col)
+                    c.border = thin_border
+                    c.fill = fill_to_use
+                    c.alignment = Alignment(horizontal="center" if col in [3, 4, 6, 7, 8] else "left", vertical="center")
+
+                wb.save(filepath)
+                hide_file(filepath)
+            except Exception as e:
+                pass
+
+    def direct_mark_sorting_ok(self, model_name, raw_code):
+        with self.file_lock:
+            try:
+                clean_target = raw_code.strip().upper()
+                files = self.get_all_model_files(model_name)
+                current_quarter_file = os.path.join(BASE_DIR, get_quarter_filename(model_name))
+                if current_quarter_file not in files:
+                    files.append(current_quarter_file)
+
+                ok_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+                ok_font = Font(name="맑은 고딕", size=10, bold=True, color="006100")
+                thin_border = Border(
+                    left=Side(style='thin', color='D9D9D9'), right=Side(style='thin', color='D9D9D9'),
+                    top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9')
+                )
+
+                for f_path in files:
+                    if not os.path.exists(f_path):
+                        continue
+                    unhide_file(f_path)
+                    wb = openpyxl.load_workbook(f_path)
+                    if "sorting" in wb.sheetnames:
+                        ws_sort = wb["sorting"]
+                        modified = False
+                        for r in range(2, 2001):
+                            val = ws_sort.cell(row=r, column=2).value
+                            if val and str(val).strip().upper() == clean_target:
+                                c_cell = ws_sort.cell(row=r, column=3)
+                                c_cell.value = "OK"
+                                c_cell.fill = ok_fill
+                                c_cell.font = ok_font
+                                c_cell.border = thin_border
+                                c_cell.alignment = Alignment(horizontal="center", vertical="center")
+                                modified = True
+                        if modified:
+                            wb.save(f_path)
+                    hide_file(f_path)
+            except Exception as e:
+                pass
+
+    def direct_append_single_item(self, model_name, item):
+        with self.file_lock:
+            try:
+                filename = get_quarter_filename(model_name)
+                filepath = os.path.join(BASE_DIR, filename)
+                wb, ws = self.open_or_init_workbook(filepath)
+
+                thin_border = Border(
+                    left=Side(style='thin', color='D9D9D9'), right=Side(style='thin', color='D9D9D9'),
+                    top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9')
+                )
+                ok_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+
+                start_row = ws.max_row + 1
+                ts_full = f"{item['day']} {item['time']}"
+                row_data = [item.get("pallet", ""), "-", "-", "-", item["code"], ts_full, item["result"], ""]
+                ws.append(row_data)
+
+                for col in range(1, 9):
+                    c = ws.cell(row=start_row, column=col)
+                    c.border = thin_border
+                    c.alignment = Alignment(horizontal="center" if col in [3, 4, 6, 7, 8] else "left", vertical="center")
+                    if col == 7:
+                        c.fill = ok_fill
+
+                wb.save(filepath)
+                hide_file(filepath)
+            except Exception as e:
+                pass
+
+    def direct_finalize_excel_group(self, model_name, pallet_code, box_qr, box_time, items, header_text, extra_content=""):
+        with self.file_lock:
+            try:
+                filename = get_quarter_filename(model_name)
+                filepath = os.path.join(BASE_DIR, filename)
+                wb, ws = self.open_or_init_workbook(filepath)
+
+                item_codes = set(it["code"].strip().upper() for it in items)
+
+                for row in reversed(list(ws.iter_rows(min_row=2, max_row=ws.max_row))):
+                    dmc_val = str(row[4].value).strip().upper() if row[4].value else ""
+                    if dmc_val in item_codes:
+                        row[0].value = pallet_code
+                        row[1].value = box_qr
+                        row[2].value = box_time
+                        item_codes.remove(dmc_val)
+                    if not item_codes:
+                        break
+
+                thin_border = Border(
+                    left=Side(style='thin', color='D9D9D9'), right=Side(style='thin', color='D9D9D9'),
+                    top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9')
+                )
+
+                header_row = [pallet_code, box_qr, box_time, "HEADER", header_text, box_time, "OK", extra_content]
+                ws.append(header_row)
+                h_row_idx = ws.max_row
+                for col in range(1, 9):
+                    c = ws.cell(row=h_row_idx, column=col)
+                    c.border = thin_border
+                    c.alignment = Alignment(horizontal="center" if col in [3, 4, 6, 7, 8] else "left", vertical="center")
+
+                wb.save(filepath)
+                hide_file(filepath)
+            except Exception as e:
+                pass
+
+    def direct_handle_dmc_duplicate(self, model_name, raw_code, day_str, time_str, matched_label, dup_text, pallet_code):
+        with self.file_lock:
+            try:
+                clean_target = raw_code.strip().upper()
+                files = self.get_all_model_files(model_name)
+                current_quarter_file = os.path.join(BASE_DIR, get_quarter_filename(model_name))
+                if current_quarter_file not in files:
+                    files.append(current_quarter_file)
+
+                ng_fill = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
+                ng_font = Font(name="맑은 고딕", size=10, bold=True, color="C00000")
+                thin_border = Border(
+                    left=Side(style='thin', color='D9D9D9'), right=Side(style='thin', color='D9D9D9'),
+                    top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9')
+                )
+
+                for f_path in files:
+                    if not os.path.exists(f_path):
+                        continue
+                    unhide_file(f_path)
+                    wb = openpyxl.load_workbook(f_path)
+                    ws = wb["스캔실적"] if "스캔실적" in wb.sheetnames else wb.active
+                    modified = False
+
+                    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+                        seq_cell = row[3]
+                        dmc_cell = row[4]
+                        res_cell = row[6]
+                        content_cell = row[7] if len(row) >= 8 else None
+
+                        dmc_val = str(dmc_cell.value).strip() if dmc_cell.value else ""
+                        lbl_val = str(row[1].value).strip() if row[1].value else ""
+
+                        clean_val = dmc_val.replace("[중복스캔] ", "").replace("[중복 스캔] ", "").upper()
+                        if clean_val == clean_target and res_cell.value != "NG":
+                            res_cell.value = "NG"
+                            if content_cell:
+                                content_cell.value = dup_text
+                            for c in row[:8]:
+                                c.fill = ng_fill
+                                c.font = ng_font
+                            modified = True
+
+                        elif matched_label and lbl_val == matched_label and (str(seq_cell.value) == "HEADER" or "[" in dmc_val):
+                            res_cell.value = "NG"
+                            for c in row[:8]:
+                                c.fill = ng_fill
+                                c.font = ng_font
+                            modified = True
+
+                    if modified:
+                        wb.save(f_path)
+                    hide_file(f_path)
+
+                wb_cur, ws_cur = self.open_or_init_workbook(current_quarter_file)
+                ts_full = f"{day_str} {time_str}"
+                row_data = [pallet_code, "-", "-", "-", raw_code, ts_full, "NG", dup_text]
+                ws_cur.append(row_data)
+                h_idx = ws_cur.max_row
+                for col in range(1, 9):
+                    c = ws_cur.cell(row=h_idx, column=col)
+                    c.border = thin_border
+                    c.fill = ng_fill
+                    c.font = ng_font
+                    c.alignment = Alignment(horizontal="center" if col in [3, 4, 6, 7, 8] else "left", vertical="center")
+
+                wb_cur.save(current_quarter_file)
+                hide_file(current_quarter_file)
+            except Exception as e:
+                pass
+
+    def update_stat_cards(self):
+        curr_model = self.current_model.get()
+        counts = self.model_counts.get(curr_model, {"total": 0, "ok": 0, "ng": 0})
+        self.lbl_total_val.config(text=str(counts["total"]))
+        self.lbl_ok_val.config(text=str(counts["ok"]))
+        self.lbl_ng_val.config(text=str(counts["ng"]))
+
+    def open_reset_dialog(self):
+        win = tk.Toplevel(self.root)
+        win.title(self.t("reset_btn"))
+        win.configure(bg=BG_PANEL)
+        win.transient(self.root)
+        win.grab_set()
+
+        self.center_popup(win, 360, 210)
+
+        curr_model = self.current_model.get()
+        prompt_txt = f"[{curr_model}] " + ("카운터를 초기화하려면\n관리자 비밀번호를 입력하세요." if self.current_lang.get()=="한국어" else "Enter Admin Password to Reset Counter.")
+        tk.Label(win, text=prompt_txt, font=("맑은 고딕", 10, "bold"), fg=TEXT_COLOR, bg=BG_PANEL).pack(pady=(15, 8))
+
+        pw_entry = tk.Entry(win, show="*", font=("Arial", 14), justify="center", bg=BG_INPUT, fg="#ffffff")
+        pw_entry.pack(pady=5)
+        pw_entry.focus_set()
+
+        lbl_err = tk.Label(win, text="", font=("맑은 고딕", 9), fg="#ff6b6b", bg=BG_PANEL)
+        lbl_err.pack()
+
+        def do_reset(event=None):
+            if pw_entry.get() == self.admin_password:
+                self.model_counts[curr_model] = {"total": 0, "ok": 0, "ng": 0}
+                self.save_model_counts()
+                self.update_stat_cards()
+                win.destroy()
+                self.scan_entry.focus_set()
+            else:
+                lbl_err.config(text=self.t("pw_err"))
+                pw_entry.delete(0, tk.END)
+
+        pw_entry.bind("<Return>", do_reset)
+        tk.Button(win, text=self.t("unlock_btn"), command=do_reset, bg="#dc3545", fg="#ffffff",
+                  relief="flat", font=("맑은 고딕", 10, "bold"), padx=15, pady=3).pack(pady=10)
+
+    def apply_recode_filter(self):
+        self.tree_recode.delete(*self.tree_recode.get_children())
+        model = self.current_model.get()
+        target_upper = MODEL_CONFIG[model].upper()
+        files = self.get_all_model_files(model)
+
+        if not files:
+            return
+
+        start_day = self.entry_start_day.get().strip()
+        end_day = self.entry_end_day.get().strip()
+        start_time = self.entry_start_time.get().strip()
+        end_time = self.entry_end_time.get().strip()
+
+        try:
+            matched = []
+            for filepath in files:
+                unhide_file(filepath)
+                wb = openpyxl.load_workbook(filepath, data_only=True)
+                if "스캔실적" in wb.sheetnames:
+                    ws = wb["스캔실적"]
+                else:
+                    sheets = [s for s in wb.worksheets if s.title != "sorting"]
+                    ws = sheets[0] if sheets else wb.active
+
+                last_known_label_qr = ""
+
+                for row in ws.iter_rows(min_row=2, values_only=True):
+                    if not row or len(row) < 7:
+                        continue
+                    
+                    if len(row) >= 8:
+                        pallet_val = str(row[0]).strip().upper() if row[0] and str(row[0]).strip() != "-" else ""
+                        label_qr = row[1]
+                        box_time = row[2]
+                        seq_val = row[3]
+                        dmc_code = row[4]
+                        dmc_time = row[5]
+                        res = row[6]
+                        content = row[7] if len(row) >= 8 and row[7] else ""
+                    else:
+                        pallet_val = ""
+                        label_qr = row[0]
+                        box_time = row[1]
+                        seq_val = row[2]
+                        dmc_code = row[3]
+                        dmc_time = row[4]
+                        res = row[5]
+                        content = row[6] if len(row) >= 7 and row[6] else ""
+
+                    if label_qr and str(label_qr).strip() != "-":
+                        last_known_label_qr = str(label_qr).strip()
+
+                    ts_str = str(dmc_time if dmc_time and dmc_time != "-" else box_time)
+                    if not ts_str or ts_str == "-":
+                        continue
+
+                    parts = ts_str.split()
+                    r_day = parts[0] if len(parts) > 0 else ""
+                    r_time = parts[1] if len(parts) > 1 else "00:00:00"
+
+                    if start_day and r_day < start_day:
+                        continue
+                    if end_day and r_day > end_day:
+                        continue
+                    if start_time and r_time < start_time:
+                        continue
+                    if end_time and r_time > end_time:
+                        continue
+
+                    lbl_val = last_known_label_qr
+                    dmc_val = "" if not dmc_code or dmc_code == "-" else str(dmc_code)
+                    content_val = str(content).strip() if content else ""
+
+                    clean_dmc = dmc_val.replace("[중복스캔] ", "").replace("[중복 스캔] ", "").upper()
+                    if not (clean_dmc.startswith(target_upper) or lbl_val.upper().startswith(target_upper) or "PALLET" in dmc_val):
+                        continue
+
+                    matched.append((pallet_val, r_day, r_time, lbl_val, dmc_val, str(res), content_val))
+
+                hide_file(filepath)
+
+            for m in reversed(matched):
+                tag = ""
+                if m[5] == "NG":
+                    tag = "ng_row"
+                elif "Pallet" in str(m[4]):
+                    tag = "pallet_row"
+                self.tree_recode.insert("", tk.END, values=m, tags=(tag,) if tag else ())
+
+        except Exception:
+            pass
+
+    def save_recode_to_excel(self):
+        items = self.tree_recode.get_children()
+        if not items:
+            return
+
+        now_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        initial_name = f"{self.current_model.get()}_Recode_{now_ts}.xlsx"
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel Files", "*.xlsx")],
+            initialfile=initial_name,
+            title="Save Records"
+        )
+
+        if not save_path:
+            return
+
+        try:
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Re-code"
+
+            headers = ["Pallet Label QR", "DAY", "TIME", "Label QR", "DMC", "판정", "Content"]
+            ws.append(headers)
+
+            header_fill = PatternFill(start_color="2F5597", end_color="2F5597", fill_type="solid")
+            header_font = Font(name="맑은 고딕", size=11, bold=True, color="FFFFFF")
+            thin_border = Border(
+                left=Side(style='thin', color='D9D9D9'), right=Side(style='thin', color='D9D9D9'),
+                top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9')
+            )
+
+            for col in range(1, 8):
+                cell = ws.cell(row=1, column=col)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+
+            for idx, item_id in enumerate(items, start=2):
+                row_vals = self.tree_recode.item(item_id, "values")
+                ws.append(list(row_vals))
+                for col in range(1, 8):
+                    c = ws.cell(row=idx, column=col)
+                    c.border = thin_border
+                    c.alignment = Alignment(horizontal="center" if col in [2, 3, 6, 7] else "left", vertical="center")
+
+            ws.column_dimensions['A'].width = 30
+            ws.column_dimensions['B'].width = 14
+            ws.column_dimensions['C'].width = 14
+            ws.column_dimensions['D'].width = 46
+            ws.column_dimensions['E'].width = 34
+            ws.column_dimensions['F'].width = 12
+            ws.column_dimensions['G'].width = 16
+
+            wb.save(save_path)
+            messagebox.showinfo("Success", f"Saved successfully:\n{save_path}")
+
+        except Exception:
+            pass
+
+    def open_lock_popup(self, title_text, msg, header_bg, header_fg):
+        self.play_alarm_sound()
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title_text)
+        dialog.resizable(False, False)
+        dialog.configure(bg=header_bg)
+
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        self.center_popup(dialog, 520, 320)
+        self.active_popup = dialog
+
+        tk.Label(dialog, text=msg, font=("맑은 고딕", 11), bg=header_bg, fg=header_fg, justify=tk.LEFT).pack(pady=15)
+
+        pw_entry = tk.Entry(dialog, show="*", font=("Arial", 16), justify="center", width=14,
+                            bg=BG_INPUT, fg="#ffffff", insertbackground="#ffffff")
+        pw_entry.pack(pady=5)
+        pw_entry.focus_set()
+
+        lbl_err = tk.Label(dialog, text="", font=("맑은 고딕", 10, "bold"), fg="#ff6b6b", bg=header_bg)
+        lbl_err.pack()
+
+        def unlock(event=None):
+            if pw_entry.get() == self.admin_password:
+                dialog.grab_release()
+                dialog.destroy()
+                self.active_popup = None
+                self.set_status("READY", "#adb5bd", "#2a2e37")
+                self.scan_entry.focus_set()
+            else:
+                lbl_err.config(text=self.t("pw_err"))
+                pw_entry.delete(0, tk.END)
+
+        pw_entry.bind("<Return>", unlock)
+        tk.Button(dialog, text=self.t("unlock_btn"), command=unlock,
+                  font=("맑은 고딕", 11, "bold"), bg=header_fg, fg="#ffffff",
+                  relief="flat", padx=16, pady=5, cursor="hand2").pack(pady=12)
+
+    def change_password_dialog(self):
+        win = tk.Toplevel(self.root)
+        win.title(self.t("pw_setting"))
+        win.configure(bg=BG_PANEL)
+        win.transient(self.root)
+        win.grab_set()
+
+        self.center_popup(win, 340, 220)
+
+        prompt_curr = "현재 비밀번호" if self.current_lang.get()=="한국어" else "Current Password"
+        prompt_new = "새 6자리 숫자 비밀번호" if self.current_lang.get()=="한국어" else "New 6-digit Password"
+
+        tk.Label(win, text=prompt_curr, font=("맑은 고딕", 9), fg=TEXT_COLOR, bg=BG_PANEL).pack(pady=(15, 2))
+        curr_entry = tk.Entry(win, show="*", font=("Arial", 11), justify="center", bg=BG_INPUT, fg="#ffffff")
+        curr_entry.pack()
+
+        tk.Label(win, text=prompt_new, font=("맑은 고딕", 9), fg=TEXT_COLOR, bg=BG_PANEL).pack(pady=(10, 2))
+        new_entry = tk.Entry(win, show="*", font=("Arial", 11), justify="center", bg=BG_INPUT, fg="#ffffff")
+        new_entry.pack()
+
+        def apply_pw():
+            if curr_entry.get() != self.admin_password:
+                messagebox.showerror("Error", self.t("pw_err"), parent=win)
+                return
+            new_val = new_entry.get()
+            if len(new_val) != 6 or not new_val.isdigit():
+                messagebox.showerror("Error", "Password must be 6 digits.", parent=win)
+                return
+            self.admin_password = new_val
+            messagebox.showinfo("Success", "Password changed successfully.", parent=win)
+            win.destroy()
+
+        tk.Button(win, text=self.t("unlock_btn"), command=apply_pw, bg="#2b5278", fg="#ffffff",
+                  relief="flat", font=("맑은 고딕", 10, "bold"), padx=15, pady=4).pack(pady=15)
 
 
 if __name__ == "__main__":
-    main()
+    root = tk.Tk()
+    app = QRScanStationApp(root)
+    root.mainloop()
