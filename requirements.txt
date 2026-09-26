@@ -1,0 +1,7 @@
+openpyxl
+opencv-python
+pillow
+numpy
+pygetwindow
+pyautogui
+pyinstaller
