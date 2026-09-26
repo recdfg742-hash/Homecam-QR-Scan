@@ -11,17 +11,6 @@ from datetime import datetime
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-# 비전/이미지 처리 라이브러리
-try:
-    import cv2
-    import numpy as np
-    import pyautogui
-    import pygetwindow as gw
-    from PIL import Image, ImageTk
-    CV_AVAILABLE = True
-except ImportError:
-    CV_AVAILABLE = False
-
 try:
     import winsound
 except ImportError:
@@ -48,13 +37,6 @@ def get_base_dir():
 BASE_DIR = get_base_dir()
 COUNT_FILE = os.path.join(BASE_DIR, "counts_front.json")
 STATE_FILE = os.path.join(BASE_DIR, "pallet_state_front.json")
-CAMERA_CONFIG_FILE = os.path.join(BASE_DIR, "camera_config_front.json")
-CAMERA_REFERENCE_DIR = os.path.join(BASE_DIR, "camera_reference_front")
-os.makedirs(CAMERA_REFERENCE_DIR, exist_ok=True)
-
-CAMERA_PREVIEW_W = 380
-CAMERA_PREVIEW_H = 220
-ORIENTATION_MIN_MARGIN = 0.05
 
 FILE_ATTRIBUTE_NORMAL = 0x80
 FILE_ATTRIBUTE_HIDDEN = 0x02
@@ -121,8 +103,6 @@ LANG_PACK = {
         "ng_pallet_model_msg": "[NG: Pallet QR 모델 코드가 일치하지 않습니다]\n\n현재 선택 모델: {model} ({target})\n스캔 Pallet QR: {code}\n\n올바른 Pallet QR을 준비한 뒤 관리자 비밀번호로 해제하세요.",
         "ng_pallet_dup_title": "🚫 NG - Pallet QR 중복/순서 오류",
         "ng_pallet_dup_msg": "[NG: Pallet QR 중복 리딩 또는 박스 미완료]\n\n1) 최소 1개 이상의 박스를 완료한 후에만 팔레트 교체가 가능합니다.\n2) 이미 사용된 Pallet QR은 중복 등록할 수 없습니다.\n\n관리자 비밀번호를 입력하여 해제하세요.",
-        "ng_orientation_title": "🚫 NG - 적재 방향 불량",
-        "ng_orientation_msg": "[NG: 비전 판정 결과 제품 적재 방향이 올바르지 않습니다]\n\n박스를 다시 확인하여 방향을 바로잡은 뒤,\n동일한 Label QR을 다시 스캔하세요.\n\n(상세: {detail})\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_label_dup_title": "⚠️ Label QR NG - 중복 스캔",
         "ng_label_dup_msg": "[Label QR NG: 이미 사용된 Label QR입니다]\n\n스캔 Label QR: {code}...\n이미 등록/포장 완료된 중복 라벨입니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_group_title": "⚠️ Grouping NG - 수량 불일치",
@@ -139,21 +119,127 @@ LANG_PACK = {
         "ng_pallet_limit_msg": "[NG: Pallet QR 리딩 누락]\n\n이미 12개 박스가 채워졌습니다.\n새 Pallet QR을 리딩하지 않고 13번째 이상 박스를 진행할 수 없습니다.\n\n관리자 비밀번호를 입력하여 해제하세요.",
         "pallet_popup_title": "Pallet QR 스캔 대기",
         "pallet_popup_msg": "12개 박스 포장이 완료되었습니다.\n새로운 Pallet QR을 스캔해주세요.",
-        "camera_panel_title": "📷 적재 방향 검사 (홈캠 뷰어)",
-        "camera_status_connecting": "카메라 창 찾는 중...",
-        "camera_status_disconnected": "카메라 창 실행 필요 (Mi Home)",
-        "camera_status_no_ref": "기준(OK/NG) 이미지 미등록",
-        "camera_status_ready": "검사 대기 중",
-        "btn_roi_set": "🔲 검사영역(ROI) 설정",
-        "btn_roi_set_on": "🔲 영역 지정 중... (드래그)",
-        "btn_save_ok_ref": "✅ OK 기준 저장",
-        "btn_save_ng_ref": "❌ NG 기준 저장",
-        "roi_not_set_msg": "카메라 화면을 마우스 드래그하여 검사 영역(ROI)을 지정하세요.",
-        "ref_saved_msg": "{kind} 기준 이미지가 저장되었습니다. ({model})",
-        "manager_only_msg": "MANAGER MODE에서만 설정 가능합니다.",
         "unlock_btn": "확인 및 잠금 해제",
         "confirm_btn": "확인 (Enter)",
         "pw_err": "비밀번호가 올바르지 않습니다."
+    },
+    "English": {
+        "title": "QR SCAN STATION [FRONT]",
+        "pw_setting": "⚙ Password Setting",
+        "tab_scan": "  QR Scan  ",
+        "tab_grouping": "  Grouping  ",
+        "tab_recode": "  Re-code  ",
+        "model_label": "Model",
+        "code_label": "Part No",
+        "last_scan": "Last Scan",
+        "input_guide": "Barcode Scan Input (Focus anywhere)",
+        "reset_btn": "RESET (Clear Counter)",
+        "manager_btn": "MANAGER MODE",
+        "manager_btn_on": "MANAGER MODE [ON]",
+        "pending_status": "Ungrouped: {count} pcs – Waiting for Label QR",
+        "pallet_status": "Current Pallet: {pallet} ({boxes}/{max_b} Boxes)",
+        "record_header": "{model} Records",
+        "grouping_header": "{model} Pallet - Box Grouping Overview",
+        "th_pallet": "Pallet Label QR",
+        "th_box_seq": "Box Seq",
+        "th_day": "DAY",
+        "th_time": "TIME",
+        "th_label": "Label QR",
+        "th_dmc": "DMC",
+        "th_judgment": "JUDGMENT",
+        "th_content": "Content",
+        "filter_day": "Date Range:",
+        "filter_time": "Time Range:",
+        "search_btn": "🔍 Search",
+        "save_btn": "💾 Save (Excel Export)",
+        "box_complete": "[Box Grouping Done: {count} pcs]",
+        "dup_scan_tag": "[Duplicate Scan]",
+        "sorting_title": "⚠️ Sorting Required Alert",
+        "sorting_msg": "[Alert: Sorting Required Product]\n\nDMC Code: {code}\n\nThis product is registered in the Sorting list.\nIsolate the part and press [Enter] to continue.",
+        "ng_model_title": "⚠️ NG - Model Mismatch",
+        "ng_model_msg": "[NG: Scanned barcode does not match selected model]\n\nSelected Model: {model} ({target})\nScanned Code: {code}\n\nEnter 6-digit Admin Password to unlock.",
+        "ng_pallet_model_title": "⚠️ NG - Pallet Model Mismatch",
+        "ng_pallet_model_msg": "[NG: Pallet QR model code does not match]\n\nSelected Model: {model} ({target})\nScanned Pallet QR: {code}\n\nEnter 6-digit Admin Password to unlock.",
+        "ng_pallet_dup_title": "🚫 NG - Duplicate Pallet Scan",
+        "ng_pallet_dup_msg": "[NG: Pallet QR Duplicate or Sequence Error]\n\n1) At least 1 box must be completed before closing the pallet.\n2) Cannot re-scan an already closed Pallet QR.\n\nEnter Admin Password to unlock.",
+        "ng_label_dup_title": "⚠️ Label QR NG - Duplicate Label",
+        "ng_label_dup_msg": "[Label QR NG: This Label QR is already used]\n\nScanned Label: {code}...\nDuplicate box label detected.\n\nEnter 6-digit Admin Password to unlock.",
+        "ng_group_title": "⚠️ Grouping NG - Quantity Mismatch",
+        "ng_group_msg": "[Grouping NG: Scanned quantity does not match Label quantity]\n\nLabel Target Qty: {expected} pcs\nCurrently Scanned Qty: {current} pcs\n\nCannot proceed with grouping.\nEnter 6-digit Admin Password to unlock.",
+        "ng_limit_title": "⚠️ NG - Label QR Missing",
+        "ng_limit_msg": "[NG: Label QR Missing]\n\nAlready reached maximum capacity ({max_cnt} pcs).\n11th item is rejected and not saved.\nScan Label QR first to complete the box.\n\nEnter 6-digit Admin Password to unlock.",
+        "ng_mgr_err_title": "⚠️ NG - Manager Mode Error",
+        "ng_mgr_err_msg": "[NG: New QR must be scanned in Normal Mode]\n\nScanned Barcode: {code}\nNew parts cannot be added under Manager Mode.\nScan discarded.\n\nEnter 6-digit Admin Password to unlock.",
+        "ng_dup_title": "🚫 QR NG - Duplicate Part Detected",
+        "ng_dup_msg": "[QR NG: Duplicate part barcode detected]\n\nScanned Barcode: {code}\nThis part and associated Box Header are marked as NG.\n\nEnter 6-digit Admin Password to unlock.",
+        "ng_pallet_mid_title": "⚠️ NG - Invalid Pallet Scan Timing",
+        "ng_pallet_mid_msg": "[NG: Cannot scan Pallet QR while box packing is in progress]\n\nCurrently {count} items are pending.\nFinish 10 items and Label QR before scanning Pallet QR.",
+        "ng_pallet_limit_title": "🚫 NG - Pallet QR Missing (Exceeded 12 Boxes)",
+        "ng_pallet_limit_msg": "[NG: Pallet QR Missing]\n\n12 boxes are already filled.\nCannot pack 13th box without scanning a new Pallet QR.\n\nEnter Admin Password to unlock.",
+        "pallet_popup_title": "Waiting for Pallet QR",
+        "pallet_popup_msg": "12 boxes completed on current pallet.\nPlease scan new Pallet QR.",
+        "unlock_btn": "Confirm & Unlock",
+        "confirm_btn": "Confirm (Enter)",
+        "pw_err": "Incorrect Password."
+    },
+    "Polski": {
+        "title": "QR SCAN STATION [FRONT]",
+        "pw_setting": "⚙ Ustawienie hasła",
+        "tab_scan": "  Skan QR  ",
+        "tab_grouping": "  Grupowanie  ",
+        "tab_recode": "  Re-code  ",
+        "model_label": "Model",
+        "code_label": "Kod części",
+        "last_scan": "Ostatni skan",
+        "input_guide": "Wejście skanera (skanuj w dowolnym miejscu)",
+        "reset_btn": "RESET (Zeruj licznik)",
+        "manager_btn": "TRYB MENEDŻERA",
+        "manager_btn_on": "TRYB MENEDŻERA [ON]",
+        "pending_status": "Oczekujące: {count} szt. – Oczekiwanie na Label QR",
+        "pallet_status": "Bieżąca paleta: {pallet} ({boxes}/{max_b} pudełek)",
+        "record_header": "{model} Historia",
+        "grouping_header": "{model} Przegląd grupowania Paleta - Pudełko",
+        "th_pallet": "Pallet Label QR",
+        "th_box_seq": "Nr pudełka",
+        "th_day": "DZIEŃ",
+        "th_time": "CZAS",
+        "th_label": "Label QR",
+        "th_dmc": "DMC",
+        "th_judgment": "STATUS",
+        "th_content": "Treść",
+        "filter_day": "Zakres dat:",
+        "filter_time": "Przedział czasu:",
+        "search_btn": "🔍 Szukaj",
+        "save_btn": "💾 Zapisz (Eksport Excel)",
+        "box_complete": "[Pakiet ukończony: {count} szt.]",
+        "dup_scan_tag": "[Duplikat skanu]",
+        "sorting_title": "⚠️ Wymagane sortowanie",
+        "sorting_msg": "[Uwaga: Wymagane sortowanie produktu]\n\nKod DMC: {code}\n\nTen produkt znajduje się na liście sortowania.\nOdizoluj część i naciśnij [Enter], aby kontynuować.",
+        "ng_model_title": "⚠️ NG - Niezgodność modelu",
+        "ng_model_msg": "[NG: Zeskanowany kod nie pasuje do wybranego modelu]\n\nWybrany model: {model} ({target})\nKod: {code}\n\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
+        "ng_pallet_model_title": "⚠️ NG - Niezgodność modelu palety",
+        "ng_pallet_model_msg": "[NG: Kod modelu na etykiecie palety nie pasuje]\n\nWybrany model: {model} ({target})\nPaleta: {code}\n\nWprowadź 6-cyfrowe hasło administratora.",
+        "ng_pallet_dup_title": "🚫 NG - Błąd duplikatu palety",
+        "ng_pallet_dup_msg": "[NG: Błąd skanowania palety]\n\n1) Należy ukończyć co najmniej 1 pudełko przed zamknięciem palety.\n2) Nie można ponownie użyć zarejestrowanej palety.\n\nWprowadź hasło administratora.",
+        "ng_label_dup_title": "⚠️ Label QR NG - Duplikat etykiety",
+        "ng_label_dup_msg": "[Label QR NG: Ta etykieta została 이미 사용되었습니다]\n\nZeskanowana etykieta: {code}...\nWykryto duplikat etykiety pudełka.\n\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
+        "ng_group_title": "⚠️ Grouping NG - Niezgodność ilości",
+        "ng_group_msg": "[Grouping NG: Ilość sztuk nie zgadza się z etykietą]\n\nIlość na etykiecie: {expected} szt.\nZeskanowano: {current} szt.\n\nNie można utworzyć grupy.\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
+        "ng_limit_title": "⚠️ NG - Brak Label QR",
+        "ng_limit_msg": "[NG: Brak Label QR]\n\nOsiągnięto limit pudełka ({max_cnt} szt.).\n11. element nie został zapisany.\nZeskanuj najpierw Label QR.\n\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
+        "ng_mgr_err_title": "⚠️ NG - Błąd trybu menedżera",
+        "ng_mgr_err_msg": "[NG: Nowe części należy skanować w trybie standardowym]\n\nZeskanowany kod: {code}\nNowy element został odrzucony.\n\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
+        "ng_dup_title": "🚫 QR NG - Wykryto zduplikowany element",
+        "ng_dup_msg": "[QR NG: Kod tego elementu został 이미 이전 기록에 있습니다]\n\nZeskanowany kod: {code}\nTen element i nagłówek partii oznaczono jako NG.\n\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
+        "ng_pallet_mid_title": "⚠️ NG - Błędny moment skanowania palety",
+        "ng_pallet_mid_msg": "[NG: Nie można skanować kodu palety podczas pakowania pudełka]\n\nObecnie oczekuje {count} elementów.\nZakończ 10 sztuk i Label QR przed zeskanowaniem palety.",
+        "ng_pallet_limit_title": "🚫 NG - Brak kodu palety (Przekroczono 12 pudełek)",
+        "ng_pallet_limit_msg": "[NG: Wymagany nowy kod palety]\n\nZapakowano już 12 pudełek.\nNie można kontynuować 13. pudełka bez nowej palety.\n\nWprowadź hasło administratora.",
+        "pallet_popup_title": "Oczekiwanie na kod palety",
+        "pallet_popup_msg": "Ukończono 12 pudełek na palecie.\nZeskanuj kod nowej palety.",
+        "unlock_btn": "Potwierdź i odblokuj",
+        "confirm_btn": "Potwierdź (Enter)",
+        "pw_err": "Nieprawidłowe hasło."
     }
 }
 
@@ -163,27 +249,16 @@ BG_INPUT = "#15181e"
 TEXT_COLOR = "#e1e4ea"
 TEXT_MUTED = "#8b949e"
 ACCENT_YELLOW = "#f59f00"
-
-def extract_orientation_feature(bgr_image):
-    hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
-    _, s, v = cv2.split(hsv)
-    mean_v = float(np.mean(v))
-    mean_s = float(np.mean(s))
-    bright_ratio = float(np.mean(v > 140)) * 100.0
-    return np.array([mean_v, mean_s, bright_ratio], dtype=np.float64)
-
-def feature_distance(feat_a, feat_b):
-    scale = np.array([255.0, 255.0, 100.0], dtype=np.float64)
-    diff = (feat_a - feat_b) / scale
-    return float(np.sqrt(np.sum(diff ** 2)))
+COLOR_OK = "#28a745"
+COLOR_NG = "#dc3545"
 
 
 class QRScanStationApp:
     def __init__(self, root):
         self.root = root
         self.root.title("QR SCAN STATION [FRONT]")
-        self.root.geometry("1420x860")
-        self.root.minsize(1240, 760)
+        self.root.geometry("1420x820")
+        self.root.minsize(1240, 740)
         self.root.configure(bg=BG_MAIN)
 
         self.current_lang = tk.StringVar(value="한국어")
@@ -212,23 +287,10 @@ class QRScanStationApp:
         self.file_lock = threading.Lock()
         self.global_scan_buffer = []
 
-        # 비전 및 화면 캡처 관련 상태
-        self.camera_config = self.load_camera_config()
-        self.latest_cam_frame = None
-        self.roi_select_mode = False
-        self.roi_drag_start = None
-        self.roi_preview_scale = 1.0
-        self.camera_preview_photo = None
-        self.last_orientation_detail = ""
-        self.last_orientation_status = ""
-
         self.setup_custom_styles()
         self.setup_ui()
         self.setup_global_key_listener()
         self.on_model_changed()
-
-        # 화면 캡처 기반 실시간 뷰어 시작
-        self.start_window_stream()
 
     def t(self, key, **kwargs):
         pack = LANG_PACK.get(self.current_lang.get(), LANG_PACK["한국어"])
@@ -245,193 +307,6 @@ class QRScanStationApp:
                     time.sleep(0.08)
         threading.Thread(target=_beep, daemon=True).start()
 
-    # ---------------- 샤오미 창 실시간 캡처 루프 ----------------
-    def start_window_stream(self):
-        def _worker():
-            while True:
-                if CV_AVAILABLE and gw and pyautogui:
-                    try:
-                        targets = [w for w in gw.getAllWindows() if any(k in w.title.lower() for k in ['xiaomi', 'mi home', 'camera', '미홈', '샤오미', 'bluestacks'])]
-                        if targets:
-                            win = targets[0]
-                            if not win.isMinimized and win.width > 50 and win.height > 50:
-                                shot = pyautogui.screenshot(region=(win.left, win.top, win.width, win.height))
-                                frame = cv2.cvtColor(np.array(shot), cv2.COLOR_RGB2BGR)
-                                self.latest_cam_frame = frame
-                            else:
-                                self.latest_cam_frame = None
-                        else:
-                            self.latest_cam_frame = None
-                    except Exception:
-                        self.latest_cam_frame = None
-                time.sleep(0.08)
-
-        threading.Thread(target=_worker, daemon=True).start()
-        self.root.after(300, self.update_camera_preview)
-
-    def update_camera_preview(self):
-        frame = self.latest_cam_frame
-
-        if frame is None:
-            self.lbl_camera_status.config(text=self.t("camera_status_disconnected"), fg="#ff8787")
-            self.camera_canvas.delete("all")
-            self.camera_canvas.create_text(CAMERA_PREVIEW_W//2, CAMERA_PREVIEW_H//2, text="[샤오미/미홈 창을 띄워주세요]", fill="#64748b", font=("맑은 고딕", 9))
-            self.root.after(400, self.update_camera_preview)
-            return
-
-        h_img, w_img = frame.shape[:2]
-        self.roi_preview_scale = min(CAMERA_PREVIEW_W / w_img, CAMERA_PREVIEW_H / h_img)
-        disp_w = max(1, int(w_img * self.roi_preview_scale))
-        disp_h = max(1, int(h_img * self.roi_preview_scale))
-
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        resized = cv2.resize(rgb, (disp_w, disp_h))
-        pil_img = Image.fromarray(resized)
-        self.camera_preview_photo = ImageTk.PhotoImage(pil_img)
-
-        self.camera_canvas.delete("all")
-        self.camera_canvas.create_image(0, 0, anchor="nw", image=self.camera_preview_photo)
-
-        roi = self.get_current_roi()
-        if roi:
-            rx = roi['x'] * self.roi_preview_scale
-            ry = roi['y'] * self.roi_preview_scale
-            rw = roi['w'] * self.roi_preview_scale
-            rh = roi['h'] * self.roi_preview_scale
-            self.camera_canvas.create_rectangle(rx, ry, rx + rw, ry + rh, outline="#facc15", width=2)
-
-        if roi is None:
-            self.lbl_camera_status.config(text=self.t("roi_not_set_msg"), fg="#f59f00")
-        elif not (self.load_reference_feature("ok") is not None and self.load_reference_feature("ng") is not None):
-            self.lbl_camera_status.config(text=self.t("camera_status_no_ref"), fg="#f59f00")
-        else:
-            self.lbl_camera_status.config(text=self.t("camera_status_ready"), fg="#8bd9a0")
-
-        self.root.after(100, self.update_camera_preview)
-
-    def toggle_roi_select_mode(self):
-        self.roi_select_mode = not self.roi_select_mode
-        if self.roi_select_mode:
-            self.btn_roi_set.config(text=self.t("btn_roi_set_on"), bg="#2b5278", fg="#ffffff")
-        else:
-            self.btn_roi_set.config(text=self.t("btn_roi_set"), bg="#2c323d", fg="#adb5bd")
-
-    def on_roi_canvas_press(self, event):
-        if not self.roi_select_mode:
-            return
-        self.roi_drag_start = (event.x, event.y)
-
-    def on_roi_canvas_drag(self, event):
-        if not self.roi_select_mode or self.roi_drag_start is None:
-            return
-        self.camera_canvas.delete("roi_drag_rect")
-        x0, y0 = self.roi_drag_start
-        self.camera_canvas.create_rectangle(x0, y0, event.x, event.y, outline="#3b82f6", width=2, tags="roi_drag_rect")
-
-    def on_roi_canvas_release(self, event):
-        if not self.roi_select_mode or self.roi_drag_start is None:
-            return
-        x0, y0 = self.roi_drag_start
-        x1, y1 = event.x, event.y
-        self.roi_drag_start = None
-
-        left, top = min(x0, x1), min(y0, y1)
-        width, height = abs(x1 - x0), abs(y1 - y0)
-        if width < 10 or height < 10 or self.roi_preview_scale <= 0:
-            return
-
-        roi_dict = {
-            "x": int(left / self.roi_preview_scale),
-            "y": int(top / self.roi_preview_scale),
-            "w": int(width / self.roi_preview_scale),
-            "h": int(height / self.roi_preview_scale),
-        }
-        self.camera_config.setdefault("roi_by_model", {})[self.current_model.get()] = roi_dict
-        self.save_camera_config()
-        self.toggle_roi_select_mode()
-
-    def get_current_roi(self):
-        return self.camera_config.get("roi_by_model", {}).get(self.current_model.get())
-
-    def get_reference_path(self, kind):
-        safe_model = self.current_model.get().replace('-', '_')
-        return os.path.join(CAMERA_REFERENCE_DIR, f"{safe_model}_{kind}.png")
-
-    def save_reference_image(self, kind):
-        if not self.is_manager_mode:
-            messagebox.showwarning("MANAGER MODE", self.t("manager_only_msg"))
-            return
-        roi = self.get_current_roi()
-        if not roi:
-            messagebox.showwarning("ROI", self.t("roi_not_set_msg"))
-            return
-        if self.latest_cam_frame is None:
-            messagebox.showwarning("Camera", self.t("camera_status_disconnected"))
-            return
-
-        f = self.latest_cam_frame
-        x, y, w, h = roi['x'], roi['y'], roi['w'], roi['h']
-        crop = f[y:y+h, x:x+w]
-        if crop is None or crop.size == 0:
-            return
-
-        path = self.get_reference_path(kind)
-        cv2.imwrite(path, crop)
-        kind_label = "OK" if kind == "ok" else "NG"
-        messagebox.showinfo("OK", self.t("ref_saved_msg", kind=kind_label, model=self.current_model.get()))
-
-    def load_reference_feature(self, kind):
-        path = self.get_reference_path(kind)
-        if not (CV_AVAILABLE and os.path.exists(path)):
-            return None
-        img = cv2.imread(path)
-        if img is None:
-            return None
-        return extract_orientation_feature(img)
-
-    def judge_box_orientation(self):
-        if not CV_AVAILABLE or self.latest_cam_frame is None:
-            return None, "camera_unavailable"
-        roi = self.get_current_roi()
-        if not roi:
-            return None, "roi_not_set"
-
-        f = self.latest_cam_frame
-        x, y, w, h = roi['x'], roi['y'], roi['w'], roi['h']
-        crop = f[y:y+h, x:x+w]
-        if crop is None or crop.size == 0:
-            return None, "invalid_crop"
-
-        ok_feat = self.load_reference_feature("ok")
-        ng_feat = self.load_reference_feature("ng")
-        if ok_feat is None or ng_feat is None:
-            return None, "reference_not_registered"
-
-        live_feat = extract_orientation_feature(crop)
-        dist_to_ok = feature_distance(live_feat, ok_feat)
-        dist_to_ng = feature_distance(live_feat, ng_feat)
-        detail = f"d_ok={dist_to_ok:.3f}, d_ng={dist_to_ng:.3f}"
-
-        if dist_to_ok < dist_to_ng and (dist_to_ng - dist_to_ok) >= ORIENTATION_MIN_MARGIN:
-            return True, detail
-        return False, detail
-
-    def load_camera_config(self):
-        if os.path.exists(CAMERA_CONFIG_FILE):
-            try:
-                with open(CAMERA_CONFIG_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        return {"roi_by_model": {}}
-
-    def save_camera_config(self):
-        try:
-            with open(CAMERA_CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(self.camera_config, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
-
     def load_model_counts(self):
         default_counts = {m: {"total": 0, "ok": 0, "ng": 0} for m in MODEL_CONFIG}
         if os.path.exists(COUNT_FILE):
@@ -443,7 +318,7 @@ class QRScanStationApp:
                             default_counts[m] = data[m]
                     return default_counts
             except Exception:
-                pass
+                return default_counts
         return default_counts
 
     def save_model_counts(self):
@@ -464,7 +339,7 @@ class QRScanStationApp:
                             default_state[m] = data[m]
                     return default_state
             except Exception:
-                pass
+                return default_state
         return default_state
 
     def save_pallet_state(self):
@@ -579,19 +454,19 @@ class QRScanStationApp:
             left_panel, text="", 
             font=("맑은 고딕", 11, "bold"), fg=ACCENT_YELLOW, bg=BG_PANEL, justify=tk.LEFT
         )
-        self.lbl_model_info.pack(anchor="w", padx=20, pady=(10, 4))
+        self.lbl_model_info.pack(anchor="w", padx=20, pady=(15, 10))
 
         self.status_box = tk.Label(
-            left_panel, text="READY", font=("Arial", 32, "bold"),
-            fg="#adb5bd", bg="#2a2e37", height=2, relief="flat"
+            left_panel, text="READY", font=("Arial", 38, "bold"),
+            fg="#adb5bd", bg="#2a2e37", height=3, relief="flat"
         )
-        self.status_box.pack(fill=tk.X, padx=20, pady=4)
+        self.status_box.pack(fill=tk.X, padx=20, pady=6)
 
         self.lbl_last_scan = tk.Label(
             left_panel, text=f"{self.t('last_scan')}: -", font=("맑은 고딕", 9),
             fg=TEXT_MUTED, bg=BG_PANEL, anchor="w"
         )
-        self.lbl_last_scan.pack(fill=tk.X, padx=20, pady=(6, 2))
+        self.lbl_last_scan.pack(fill=tk.X, padx=20, pady=(10, 3))
 
         self.lbl_input_guide = tk.Label(left_panel, text=self.t("input_guide"), font=("맑은 고딕", 9),
                                         fg=TEXT_MUTED, bg=BG_PANEL, anchor="w")
@@ -602,110 +477,58 @@ class QRScanStationApp:
             insertbackground="#ffffff", relief="flat", highlightthickness=1,
             highlightbackground="#343c4c", highlightcolor="#3b82f6"
         )
-        self.scan_entry.pack(fill=tk.X, padx=20, pady=(4, 8), ipady=4)
+        self.scan_entry.pack(fill=tk.X, padx=20, pady=(4, 15), ipady=5)
         self.scan_entry.bind("<Return>", lambda e: self.process_scan(self.scan_entry.get()))
         self.scan_entry.bind("<KeyRelease>", self.on_entry_key_release)
 
         stats_frame = tk.Frame(left_panel, bg=BG_PANEL)
-        stats_frame.pack(fill=tk.X, padx=20, pady=2)
+        stats_frame.pack(fill=tk.X, padx=20, pady=3)
         stats_frame.columnconfigure((0, 1, 2), weight=1)
 
-        card_total = tk.Frame(stats_frame, bg="#1a1e26", pady=4)
+        card_total = tk.Frame(stats_frame, bg="#1a1e26", pady=6)
         card_total.grid(row=0, column=0, padx=2, sticky="nsew")
-        self.lbl_total_val = tk.Label(card_total, text="0", font=("Arial", 14, "bold"), fg=TEXT_COLOR, bg="#1a1e26")
+        self.lbl_total_val = tk.Label(card_total, text="0", font=("Arial", 16, "bold"), fg=TEXT_COLOR, bg="#1a1e26")
         self.lbl_total_val.pack()
         tk.Label(card_total, text="TOTAL", font=("Arial", 8, "bold"), fg=TEXT_MUTED, bg="#1a1e26").pack()
 
-        card_ok = tk.Frame(stats_frame, bg="#1a1e26", pady=4)
+        card_ok = tk.Frame(stats_frame, bg="#1a1e26", pady=6)
         card_ok.grid(row=0, column=1, padx=2, sticky="nsew")
-        self.lbl_ok_val = tk.Label(card_ok, text="0", font=("Arial", 14, "bold"), fg="#28a745", bg="#1a1e26")
+        self.lbl_ok_val = tk.Label(card_ok, text="0", font=("Arial", 16, "bold"), fg="#28a745", bg="#1a1e26")
         self.lbl_ok_val.pack()
         tk.Label(card_ok, text="OK", font=("Arial", 8, "bold"), fg=TEXT_MUTED, bg="#1a1e26").pack()
 
-        card_ng = tk.Frame(stats_frame, bg="#1a1e26", pady=4)
+        card_ng = tk.Frame(stats_frame, bg="#1a1e26", pady=6)
         card_ng.grid(row=0, column=2, padx=2, sticky="nsew")
-        self.lbl_ng_val = tk.Label(card_ng, text="0", font=("Arial", 14, "bold"), fg="#dc3545", bg="#1a1e26")
+        self.lbl_ng_val = tk.Label(card_ng, text="0", font=("Arial", 16, "bold"), fg="#dc3545", bg="#1a1e26")
         self.lbl_ng_val.pack()
         tk.Label(card_ng, text="NG", font=("Arial", 8, "bold"), fg=TEXT_MUTED, bg="#1a1e26").pack()
 
-        btn_row = tk.Frame(left_panel, bg=BG_PANEL)
-        btn_row.pack(fill=tk.X, padx=20, pady=(6, 4))
-        self.btn_reset = tk.Button(
-            btn_row, text=self.t("reset_btn"), command=self.open_reset_dialog,
+        btn_reset = tk.Button(
+            left_panel, text=self.t("reset_btn"), command=self.open_reset_dialog,
             bg="#2c323d", fg="#ff8787", activebackground="#3d2729", activeforeground="#ff6b6b",
-            relief="flat", font=("맑은 고딕", 8, "bold"), pady=3, cursor="hand2"
+            relief="flat", font=("맑은 고딕", 9, "bold"), pady=4, cursor="hand2"
         )
-        self.btn_reset.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 3))
+        btn_reset.pack(fill=tk.X, padx=20, pady=(8, 4))
+        self.btn_reset = btn_reset
 
         self.btn_manager = tk.Button(
-            btn_row, text=self.t("manager_btn"), command=self.toggle_manager_mode,
+            left_panel, text=self.t("manager_btn"), command=self.toggle_manager_mode,
             bg="#2c323d", fg="#adb5bd", activebackground="#303642", activeforeground="#ffffff",
-            relief="flat", font=("맑은 고딕", 8, "bold"), pady=3, cursor="hand2"
+            relief="flat", font=("맑은 고딕", 9, "bold"), pady=4, cursor="hand2"
         )
-        self.btn_manager.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(3, 0))
+        self.btn_manager.pack(fill=tk.X, padx=20, pady=(0, 8))
 
         self.lbl_pallet_status = tk.Label(
             left_panel, text="현재 팔레트: - (0/12 박스)",
             font=("맑은 고딕", 9, "bold"), fg="#38bdf8", bg=BG_PANEL, anchor="w"
         )
-        self.lbl_pallet_status.pack(fill=tk.X, padx=20, pady=(2, 2))
+        self.lbl_pallet_status.pack(fill=tk.X, padx=20, pady=(2, 3))
 
         self.lbl_pending_status = tk.Label(
-            left_panel, text="", font=("맑은 고딕", 8), fg=TEXT_MUTED, bg=BG_PANEL, anchor="w"
+            left_panel, text="", font=("맑은 고딕", 9), fg=TEXT_MUTED, bg=BG_PANEL, anchor="w"
         )
-        self.lbl_pending_status.pack(fill=tk.X, padx=20, pady=(0, 4))
+        self.lbl_pending_status.pack(fill=tk.X, padx=20, pady=(0, 5))
 
-        # ---------------- 홈캠 실시간 뷰어 패널 (좌측 하단) ----------------
-        camera_panel = tk.Frame(left_panel, bg=BG_PANEL)
-        camera_panel.pack(fill=tk.BOTH, expand=True, padx=20, pady=(2, 8))
-
-        self.lbl_camera_title = tk.Label(
-            camera_panel, text=self.t("camera_panel_title"), font=("맑은 고딕", 9, "bold"),
-            fg="#38bdf8", bg=BG_PANEL, anchor="w"
-        )
-        self.lbl_camera_title.pack(fill=tk.X)
-
-        self.camera_canvas = tk.Canvas(
-            camera_panel, width=CAMERA_PREVIEW_W, height=CAMERA_PREVIEW_H,
-            bg="#0d0f13", highlightthickness=1, highlightbackground="#343c4c", cursor="crosshair"
-        )
-        self.camera_canvas.pack(pady=(4, 3))
-        self.camera_canvas.bind("<ButtonPress-1>", self.on_roi_canvas_press)
-        self.camera_canvas.bind("<B1-Motion>", self.on_roi_canvas_drag)
-        self.camera_canvas.bind("<ButtonRelease-1>", self.on_roi_canvas_release)
-
-        self.lbl_camera_status = tk.Label(
-            camera_panel, text=self.t("camera_status_connecting"), font=("맑은 고딕", 8),
-            fg=TEXT_MUTED, bg=BG_PANEL, anchor="w"
-        )
-        self.lbl_camera_status.pack(fill=tk.X)
-
-        cam_btn_row = tk.Frame(camera_panel, bg=BG_PANEL)
-        cam_btn_row.pack(fill=tk.X, pady=(4, 0))
-
-        self.btn_roi_set = tk.Button(
-            cam_btn_row, text=self.t("btn_roi_set"), command=self.toggle_roi_select_mode,
-            bg="#2c323d", fg="#adb5bd", relief="flat", font=("맑은 고딕", 8, "bold"), pady=2, cursor="hand2"
-        )
-        self.btn_roi_set.pack(fill=tk.X, pady=(0, 3))
-
-        ref_btn_row = tk.Frame(camera_panel, bg=BG_PANEL)
-        ref_btn_row.pack(fill=tk.X)
-        ref_btn_row.columnconfigure((0, 1), weight=1)
-
-        self.btn_save_ok_ref = tk.Button(
-            ref_btn_row, text=self.t("btn_save_ok_ref"), command=lambda: self.save_reference_image("ok"),
-            bg="#1c3a24", fg="#8bd9a0", relief="flat", font=("맑은 고딕", 8, "bold"), pady=2, cursor="hand2"
-        )
-        self.btn_save_ok_ref.grid(row=0, column=0, sticky="ew", padx=(0, 2))
-
-        self.btn_save_ng_ref = tk.Button(
-            ref_btn_row, text=self.t("btn_save_ng_ref"), command=lambda: self.save_reference_image("ng"),
-            bg="#3a1c1f", fg="#ff9c9c", relief="flat", font=("맑은 고딕", 8, "bold"), pady=2, cursor="hand2"
-        )
-        self.btn_save_ng_ref.grid(row=0, column=1, sticky="ew", padx=(2, 0))
-
-        # 우측 패널 (데이터 테이블)
         right_panel = tk.Frame(main_frame, bg=BG_MAIN)
         right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
@@ -933,8 +756,8 @@ class QRScanStationApp:
         self.tree_recode.column("JUDGMENT", width=75, anchor="center")
         self.tree_recode.column("Content", width=95, anchor="center")
 
-        tree_scroll = ttk.Scrollbar(recode_frame, orient=tk.VERTICAL, command=self.tree_recode.yview)
-        self.tree_recode.configure(yscroll=tree_scroll.set)
+        scroll_r = ttk.Scrollbar(recode_frame, orient=tk.VERTICAL, command=self.tree_recode.yview)
+        self.tree_recode.configure(yscroll=scroll_r.set)
 
         self.tree_recode.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll_r.pack(side=tk.RIGHT, fill=tk.Y)
@@ -980,11 +803,6 @@ class QRScanStationApp:
         self.lbl_filter_time.config(text=self.t("filter_time"))
         self.btn_search.config(text=self.t("search_btn"))
         self.btn_save.config(text=self.t("save_btn"))
-
-        self.lbl_camera_title.config(text=self.t("camera_panel_title"))
-        self.btn_roi_set.config(text=self.t("btn_roi_set_on") if self.roi_select_mode else self.t("btn_roi_set"))
-        self.btn_save_ok_ref.config(text=self.t("btn_save_ok_ref"))
-        self.btn_save_ng_ref.config(text=self.t("btn_save_ng_ref"))
 
         self.scan_entry.focus_set()
 
@@ -1442,7 +1260,6 @@ class QRScanStationApp:
         is_label_qr = (raw_code.count(';') >= 3)
         self.lbl_last_scan.config(text=f"{self.t('last_scan')}: {raw_code}")
 
-        # [검증 1] 모델 코드 불일치 NG
         if scanned_prefix != target_code:
             self.set_status("NG", "#dc3545", "#3a1c1f")
             self.open_lock_popup(
@@ -1452,14 +1269,12 @@ class QRScanStationApp:
             )
             return
 
-        # [검증 2] Sorting 필요 제품 체크 (C열 OK 마킹 및 팝업)
         if not is_label_qr and clean_upper_code in self.sorting_list_by_model[curr_model]:
             self.set_status("SORTING", "#f59f00", "#3d2716")
             self.direct_mark_sorting_ok(curr_model, raw_code)
             self.open_sorting_popup(raw_code)
             return
 
-        # [검증 3] Label QR 전용 검증 (+ 비전 판정 실행)
         if is_label_qr:
             curr_box_cnt = self.pallet_state[curr_model]["box_count"]
 
@@ -1497,21 +1312,6 @@ class QRScanStationApp:
                 )
                 return
 
-            # [핵심] 홈캠 기반 적재 방향 자동 판정
-            is_ok, detail = self.judge_box_orientation()
-            self.last_orientation_detail = detail
-            self.last_orientation_status = "OK" if is_ok else ("SKIP" if is_ok is None else "NG")
-
-            if is_ok is False:
-                self.set_status("방향 NG", "#dc3545", "#3a1c1f")
-                self.open_lock_popup(
-                    title_text=self.t("ng_orientation_title"),
-                    msg=self.t("ng_orientation_msg", detail=detail),
-                    header_bg="#2d1d20", header_fg="#f87171"
-                )
-                return
-
-        # [검증 4] 단품 QR 전용 체크
         if not is_label_qr:
             if len(self.pending_items) >= MAX_ITEMS_PER_BOX:
                 self.set_status("NG", "#dc3545", "#3a1c1f")
@@ -1639,14 +1439,7 @@ class QRScanStationApp:
 
             self.root.update_idletasks()
 
-            if getattr(self, "last_orientation_status", "") == "OK":
-                orientation_note = f"[적재방향 OK] {self.last_orientation_detail}"
-            elif getattr(self, "last_orientation_status", "") == "SKIP":
-                orientation_note = f"[적재방향 미검사: {self.last_orientation_detail}]"
-            else:
-                orientation_note = ""
-
-            self.direct_finalize_excel_group(curr_model, cur_pallet, raw_code, timestamp_full, items_to_bundle, header_text, extra_content=orientation_note)
+            self.direct_finalize_excel_group(curr_model, cur_pallet, raw_code, timestamp_full, items_to_bundle, header_text)
             self.refresh_grouping_tab()
 
             if self.pallet_state[curr_model]["box_count"] >= MAX_BOXES_PER_PALLET:
@@ -1654,9 +1447,6 @@ class QRScanStationApp:
 
         self.scan_entry.focus_set()
 
-    # ==========================================
-    # 6. 엑셀 8개 열 격리 I/O
-    # ==========================================
     def open_or_init_workbook(self, filepath):
         unhide_file(filepath)
         if os.path.exists(filepath):
@@ -1813,7 +1603,7 @@ class QRScanStationApp:
             except Exception as e:
                 pass
 
-    def direct_finalize_excel_group(self, model_name, pallet_code, box_qr, box_time, items, header_text, extra_content=""):
+    def direct_finalize_excel_group(self, model_name, pallet_code, box_qr, box_time, items, header_text):
         with self.file_lock:
             try:
                 filename = get_quarter_filename(model_name)
@@ -1837,7 +1627,7 @@ class QRScanStationApp:
                     top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9')
                 )
 
-                header_row = [pallet_code, box_qr, box_time, "HEADER", header_text, box_time, "OK", extra_content]
+                header_row = [pallet_code, box_qr, box_time, "HEADER", header_text, box_time, "OK", ""]
                 ws.append(header_row)
                 h_row_idx = ws.max_row
                 for col in range(1, 9):
