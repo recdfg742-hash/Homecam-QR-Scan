@@ -30,14 +30,14 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # ==========================================
-# 1. REAR 전용 모델 및 카메라 설정
+# 1. FRONT 전용 모델 및 카메라 설정
 # ==========================================
 MODEL_CONFIG = {
-    'S-REAR':  'MPL02914AD',
-    'R-REAR':  'MPL02925AD'
+    'S-FRONT': 'MPL02916AD',
+    'R-FRONT': 'MPL02926AD'
 }
 
-TARGET_CAM_NAME = "Aluko 4"
+TARGET_CAM_NAME = "Aluko 3"
 CODE_TO_MODEL = {v: k for k, v in MODEL_CONFIG.items()}
 DEFAULT_PASSWORD = "123456"
 MAX_ITEMS_PER_BOX = 10
@@ -49,9 +49,9 @@ def get_base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 BASE_DIR = get_base_dir()
-COUNT_FILE = os.path.join(BASE_DIR, "counts_rear.json")
-STATE_FILE = os.path.join(BASE_DIR, "pallet_state_rear.json")
-CAPTURE_DIR = os.path.join(BASE_DIR, "captures_rear")
+COUNT_FILE = os.path.join(BASE_DIR, "counts_front.json")
+STATE_FILE = os.path.join(BASE_DIR, "pallet_state_front.json")
+CAPTURE_DIR = os.path.join(BASE_DIR, "captures_front")
 os.makedirs(CAPTURE_DIR, exist_ok=True)
 
 FILE_ATTRIBUTE_NORMAL = 0x80
@@ -81,7 +81,7 @@ def get_quarter_filename(model_name, dt=None):
 
 LANG_PACK = {
     "한국어": {
-        "title": "QR SCAN STATION [REAR]",
+        "title": "QR SCAN STATION [FRONT]",
         "pw_setting": "⚙ 비밀번호 설정",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -92,7 +92,7 @@ LANG_PACK = {
         "input_guide": "바코드 스캔 입력 (어느 화면에서나 스캔 가능)",
         "reset_btn": "RESET (카운터 초기화)",
         "manager_btn": "MANAGER MODE",
-        "manager_btn_on": "MANAGER MODE [ON]",
+        "manager_btn_on": "MANAGER [DMC 재스캔 대기]",
         "pending_status": "미그룹 스캔 {count}건 – Label QR 대기 중",
         "pallet_status": "현재 팔레트: {pallet} ({boxes}/{max_b} 박스)",
         "record_header": "{model} 기록",
@@ -119,8 +119,8 @@ LANG_PACK = {
         "ng_pallet_model_msg": "[NG: Pallet QR 모델 코드가 일치하지 않습니다]\n\n현재 선택 모델: {model} ({target})\n스캔 Pallet QR: {code}\n\n올바른 Pallet QR을 준비한 뒤 관리자 비밀번호로 해제하세요.",
         "ng_pallet_dup_title": "🚫 NG - Pallet QR 중복/순서 오류",
         "ng_pallet_dup_msg": "[NG: Pallet QR 중복 리딩 또는 박스 미완료]\n\n1) 최소 1개 이상의 박스를 완료한 후에만 팔레트 교체가 가능합니다.\n2) 이미 사용된 Pallet QR은 중복 등록할 수 없습니다.\n\n관리자 비밀번호를 입력하여 해제하세요.",
-        "ng_orientation_title": "🚫 NG - 제품 적재 방향 오류",
-        "ng_orientation_msg": "[비전 판정 NG: 제품 적입 방향 불일치]\n\nREAR 제품의 상단 방향이 올바르지 않습니다.\n은색 알루미늄 가공면이 보이지 않고 검은색 면이 노출되었습니다.\n\n제품을 올바른 방향으로 재적재한 후 관리자 비밀번호를 입력하세요.",
+        "ng_direction_title": "🚫 NG - 제품 적재 방향 오류",
+        "ng_direction_msg": "[비전 판정 NG: 제품 적입 방향 불일치]\n\nFRONT 제품의 완충 패킹 블록 방향이 올바르지 않습니다.\n은색 알루미늄 가공면이 위로 노출되었습니다.\n\n제품을 올바른 방향으로 고친 뒤 [MANAGER MODE]의 '적재 방향 재판정'을 누르세요.",
         "ng_label_dup_title": "⚠️ Label QR NG - 중복 스캔",
         "ng_label_dup_msg": "[Label QR NG: 이미 사용된 Label QR입니다]\n\n스캔 Label QR: {code}...\n이미 등록/포장 완료된 중복 라벨입니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_group_title": "⚠️ Grouping NG - 수량 불일치",
@@ -128,7 +128,7 @@ LANG_PACK = {
         "ng_limit_title": "⚠️ NG - Label QR 누락",
         "ng_limit_msg": "[NG 발생: Label QR 누락]\n\n단품이 이미 {max_cnt}개 모두 스캔되었습니다.\n11번째 단품은 기록되지 않습니다.\nLabel QR을 먼저 스캔하여 박스 묶음을 완료하십시오.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_mgr_err_title": "⚠️ NG - 관리자 모드 오류",
-        "ng_mgr_err_msg": "[NG: 관리자 모드가 아닌 일반 모드에서 QR 리딩 필요]\n\n스캔 바코드: {code}\n신규 제품은 일반 모드에서 등록해야 합니다.\n해당 스캔은 기록되지 않습니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
+        "ng_mgr_err_msg": "[NG: 신규 바코드는 일반 모드에서 스캔해야 합니다]\n\n스캔 바코드: {code}\n중복 재스캔 모드에서는 이미 등록된 바코드만 재입력 가능합니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_dup_title": "🚫 QR NG - 중복 바코드 감지",
         "ng_dup_msg": "[QR NG 발생: 이미 스캔된 바코드입니다]\n\n스캔 바코드: {code}\n해당 제품 및 연결된 박스 헤더가 NG로 변경되었습니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_pallet_mid_title": "⚠️ NG - Pallet 리딩 시점 오류",
@@ -154,17 +154,19 @@ ACCENT_YELLOW = "#f59f00"
 class QRScanStationApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("QR SCAN STATION [REAR]")
+        self.root.title("QR SCAN STATION [FRONT]")
         self.root.geometry("1440x880")
         self.root.minsize(1280, 780)
         self.root.configure(bg=BG_MAIN)
 
         self.current_lang = tk.StringVar(value="한국어")
-        self.current_model = tk.StringVar(value='S-REAR')
+        self.current_model = tk.StringVar(value='S-FRONT')
         self.admin_password = DEFAULT_PASSWORD
         self.model_session_id = 0
 
-        self.is_manager_mode = False
+        self.is_manager_mode = False  # 중복 DMC 재스캔 대기 모드 플래그
+        self.last_failed_label_code = ""  # 적재 방향 불량 발생 시 보관해 둘 라벨 코드
+
         self.active_popup = None
         self.pallet_wait_popup = None
 
@@ -193,8 +195,8 @@ class QRScanStationApp:
         self.setup_global_key_listener()
         self.on_model_changed()
 
-        # 블루스택 5 자동 구동 및 Aluko 4 카메라 도킹
-        self.start_bluestacks_automation()
+        # LDPlayer 9 자동 실행 및 도킹
+        self.start_ldplayer_automation()
 
     def t(self, key, **kwargs):
         pack = LANG_PACK.get(self.current_lang.get(), LANG_PACK["한국어"])
@@ -211,34 +213,29 @@ class QRScanStationApp:
                     time.sleep(0.08)
         threading.Thread(target=_beep, daemon=True).start()
 
-    def start_bluestacks_automation(self):
+    # ==========================================
+    # LDPlayer 9 자동 구동 및 좌측 하단 도킹
+    # ==========================================
+    def start_ldplayer_automation(self):
         def _auto():
-            # 1. 블루스택 5 실행
-            bs_paths = [
-                r"C:\Program Files\BlueStacks_nxt\HD-Player.exe",
-                r"C:\Program Files (x86)\BlueStacks_nxt\HD-Player.exe"
+            # 1. LDPlayer 9 실행 파일 탐색
+            ld_paths = [
+                r"C:\LDPlayer\LDPlayer9\dnplayer.exe",
+                r"D:\LDPlayer\LDPlayer9\dnplayer.exe",
+                r"C:\Program Files\LDPlayer\LDPlayer9\dnplayer.exe"
             ]
-            bs_exe = next((p for p in bs_paths if os.path.exists(p)), None)
-            if bs_exe:
-                targets = [w for w in gw.getAllWindows() if 'bluestacks' in w.title.lower()] if gw else []
+            ld_exe = next((p for p in ld_paths if os.path.exists(p)), None)
+            if ld_exe:
+                targets = [w for w in gw.getAllWindows() if any(k in w.title.lower() for k in ['ldplayer', 'dnplayer'])] if gw else []
                 if not targets:
-                    subprocess.Popen([bs_exe])
-                    time.sleep(10)
+                    subprocess.Popen([ld_exe])
+                    time.sleep(8)
 
-            # 2. Mi Home 앱 구동
-            adb_path = r"C:\Program Files\BlueStacks_nxt\HD-Adb.exe"
-            if os.path.exists(adb_path):
-                try:
-                    subprocess.run([adb_path, "shell", "monkey", "-p", "com.xiaomi.smarthome", "-c", "android.intent.category.LAUNCHER", "1"], 
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                except Exception:
-                    pass
-
-            # 3. 블루스택 창 내부 도킹
+            # 2. LDPlayer 창을 UI 좌측 하단 컨테이너로 강제 도킹
             while self.is_monitoring_running and not self.embedded_window_hwnd:
                 try:
                     if gw and win32gui:
-                        targets = [w for w in gw.getAllWindows() if 'bluestacks' in w.title.lower()]
+                        targets = [w for w in gw.getAllWindows() if any(k in w.title.lower() for k in ['ldplayer', 'dnplayer'])]
                         if targets:
                             win = targets[0]
                             hwnd = win._hWnd
@@ -254,7 +251,7 @@ class QRScanStationApp:
                             win32gui.MoveWindow(hwnd, 0, 0, 390, 230, True)
 
                             self.embedded_window_hwnd = hwnd
-                            self.root.after(0, lambda: self.lbl_cam_status.config(text=f"● LIVE ({TARGET_CAM_NAME} 연동 완료)", fg="#22c55e"))
+                            self.root.after(0, lambda: self.lbl_cam_status.config(text=f"● LIVE ({TARGET_CAM_NAME} 도킹 완료)", fg="#22c55e"))
                             break
                 except Exception:
                     pass
@@ -262,7 +259,10 @@ class QRScanStationApp:
 
         threading.Thread(target=_auto, daemon=True).start()
 
-    def inspect_rear_loading_direction(self, label_code):
+    # ==========================================
+    # 비전 적재 방향 검사 (FRONT: 은색 면 위로 노출 시 NG)
+    # ==========================================
+    def inspect_front_loading_direction(self, label_code):
         if not (CV_AVAILABLE and pyautogui):
             return True, "vision_module_missing"
 
@@ -282,7 +282,7 @@ class QRScanStationApp:
             roi = frame[int(h*0.25):int(h*0.85), int(w*0.25):int(w*0.85)]
             gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
 
-            bright_pixels = np.sum(gray_roi > 160)
+            bright_pixels = np.sum(gray_roi > 170)
             total_pixels = gray_roi.size
             bright_ratio = bright_pixels / total_pixels
 
@@ -291,13 +291,146 @@ class QRScanStationApp:
             capture_path = os.path.join(CAPTURE_DIR, f"{now_str}_{safe_name}.jpg")
             cv2.imwrite(capture_path, frame)
 
-            # REAR 기준: 은색 알루미늄 면이 위로 올라와 밝아야 OK (4번 사진 기준)
-            if bright_ratio < 0.15:
+            # 은색 면이 위로 올라오면 NG 발생 (1번 사진 기준)
+            if bright_ratio > 0.12:
                 return False, f"bright_ratio={bright_ratio:.3f}"
             return True, f"bright_ratio={bright_ratio:.3f}"
 
         except Exception as e:
             return True, str(e)
+
+    # ==========================================
+    # [핵심] 신규 MANAGER MODE 다이얼로그 (2개 버튼)
+    # ==========================================
+    def toggle_manager_mode(self):
+        if self.active_popup or self.pallet_wait_popup:
+            return
+
+        # 1. 비밀번호 확인
+        win = tk.Toplevel(self.root)
+        win.title("MANAGER AUTH")
+        win.configure(bg=BG_PANEL)
+        win.transient(self.root)
+        win.grab_set()
+
+        self.center_popup(win, 360, 200)
+
+        tk.Label(win, text="MANAGER MODE\n관리자 비밀번호 6자리를 입력하세요.", 
+                 font=("맑은 고딕", 10, "bold"), fg=TEXT_COLOR, bg=BG_PANEL).pack(pady=(15, 8))
+
+        pw_entry = tk.Entry(win, show="*", font=("Arial", 14), justify="center", bg=BG_INPUT, fg="#ffffff")
+        pw_entry.pack(pady=5)
+        pw_entry.focus_set()
+
+        lbl_err = tk.Label(win, text="", font=("맑은 고딕", 9), fg="#ff6b6b", bg=BG_PANEL)
+        lbl_err.pack()
+
+        def verify(event=None):
+            if pw_entry.get() == self.admin_password:
+                win.destroy()
+                self.open_manager_actions_dialog()
+            else:
+                lbl_err.config(text=self.t("pw_err"))
+                pw_entry.delete(0, tk.END)
+
+        pw_entry.bind("<Return>", verify)
+        tk.Button(win, text="로그인", command=verify, bg="#28a745", fg="#ffffff",
+                  relief="flat", font=("맑은 고딕", 10, "bold"), padx=15, pady=3).pack(pady=10)
+
+    def open_manager_actions_dialog(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("MANAGER CONTROL PANEL")
+        dialog.configure(bg=BG_PANEL)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        self.center_popup(dialog, 460, 240)
+
+        tk.Label(dialog, text="[ 관리자 작업 선택 ]", font=("맑은 고딕", 12, "bold"), fg="#38bdf8", bg=BG_PANEL).pack(pady=(18, 12))
+
+        # [버튼 1] 중복 샘플 DMC 재스캔 버튼
+        def act_rescan_dmc():
+            self.is_manager_mode = True
+            self.btn_manager.config(bg="#f59f00", fg="#000000", text=self.t("manager_btn_on"))
+            dialog.destroy()
+            messagebox.showinfo("안내", "중복 단품 재스캔 모드가 활성화되었습니다.\n바코드를 1회 스캔하면 자동으로 일반 모드로 전환됩니다.", parent=self.root)
+            self.scan_entry.focus_set()
+
+        btn1 = tk.Button(dialog, text="🔄 중복 단품 DMC 재스캔 활성화", command=act_rescan_dmc,
+                         bg="#1e3a5f", fg="#93c5fd", activebackground="#2b5278", activeforeground="#ffffff",
+                         font=("맑은 고딕", 10, "bold"), relief="flat", pady=8, cursor="hand2")
+        btn1.pack(fill=tk.X, padx=30, pady=5)
+
+        # [버튼 2] 적재 방향 즉시 재판정 버튼
+        def act_rejudge_orientation():
+            dialog.destroy()
+            self.rejudge_loading_direction_now()
+
+        btn2 = tk.Button(dialog, text="📷 박스 적재 방향 즉시 재판정 (홈캠)", command=act_rejudge_orientation,
+                         bg="#1c3a24", fg="#8bd9a0", activebackground="#28a745", activeforeground="#ffffff",
+                         font=("맑은 고딕", 10, "bold"), relief="flat", pady=8, cursor="hand2")
+        btn2.pack(fill=tk.X, padx=30, pady=5)
+
+    def rejudge_loading_direction_now(self):
+        """작업자가 방향을 바로잡은 뒤 즉시 카메라를 다시 읽어 재판정"""
+        curr_model = self.current_model.get()
+        label_code = self.last_failed_label_code if self.last_failed_label_code else (self.pending_items[-1]["code"] if self.pending_items else "REJUDGE")
+        
+        vision_ok, detail = self.inspect_front_loading_direction(label_code)
+
+        now = datetime.now()
+        day_str = now.strftime("%Y-%m-%d")
+        time_str = now.strftime("%H:%M:%S")
+        timestamp_full = f"{day_str} {time_str}"
+        cur_pallet = self.pallet_state[curr_model]["current_pallet"]
+
+        if vision_ok:
+            self.set_status("OK", "#28a745", "#193322")
+            messagebox.showinfo("판정 성공", f"적재 방향이 정상(OK)으로 확인되었습니다!\n({detail})", parent=self.root)
+
+            # 대기 중이던 10개 묶음 정상 완료 처리
+            if self.last_failed_label_code and len(self.pending_items) == MAX_ITEMS_PER_BOX:
+                raw_code = self.last_failed_label_code
+                self.scanned_label_by_model[curr_model].add(raw_code)
+
+                for t_id in self.pending_tree_ids:
+                    curr_vals = self.tree.item(t_id, "values")
+                    if curr_vals:
+                        self.tree.item(t_id, values=(cur_pallet, curr_vals[1], curr_vals[2], raw_code, curr_vals[4], curr_vals[5], curr_vals[6]))
+
+                items_to_bundle = list(self.pending_items)
+                header_text = self.t("box_complete", count=len(items_to_bundle))
+                self.tree.insert("", 0, values=(cur_pallet, day_str, time_str, raw_code, header_text, "OK", f"[방향 재판정 통과: {detail}]"))
+
+                self.pending_items.clear()
+                self.pending_tree_ids.clear()
+                self.lbl_pending_status.config(text=self.t("pending_status", count=0))
+
+                self.pallet_state[curr_model]["box_count"] += 1
+                self.save_pallet_state()
+                self.update_pallet_status_ui()
+
+                self.direct_finalize_excel_group(curr_model, cur_pallet, raw_code, timestamp_full, items_to_bundle, header_text, extra_content=f"[방향 재판정 통과: {detail}]")
+                self.refresh_grouping_tab()
+
+                self.last_failed_label_code = ""
+        else:
+            # 여전히 NG인 경우: NG 카운팅 +1 및 기록
+            self.model_counts[curr_model]["ng"] += 1
+            self.model_counts[curr_model]["total"] += 1
+            self.save_model_counts()
+            self.update_stat_cards()
+
+            self.set_status("방향 NG", "#dc3545", "#3a1c1f")
+            ng_note = f"[적재방향 재판정 NG: {detail}]"
+            self.tree.insert("", 0, values=(cur_pallet, day_str, time_str, label_code, "[적재 방향 불량]", "NG", ng_note), tags=("ng_row",))
+            self.direct_record_ng_log(curr_model, cur_pallet, label_code, timestamp_full, ng_note)
+
+            self.open_lock_popup(
+                title_text=self.t("ng_direction_title"),
+                msg=self.t("ng_direction_msg"),
+                header_bg="#3a1c1f", header_fg="#ff6b6b"
+            )
 
     def load_model_counts(self):
         default_counts = {m: {"total": 0, "ok": 0, "ng": 0} for m in MODEL_CONFIG}
@@ -381,7 +514,7 @@ class QRScanStationApp:
         header_frame = tk.Frame(self.root, bg=BG_MAIN, height=45)
         header_frame.pack(fill=tk.X, padx=20, pady=(10, 4))
 
-        tk.Label(header_frame, text="QR  SCAN  STATION  [REAR]", font=("Arial", 12, "bold"), 
+        tk.Label(header_frame, text="QR  SCAN  STATION  [FRONT]", font=("Arial", 12, "bold"), 
                  fg=TEXT_COLOR, bg=BG_MAIN).pack(side=tk.LEFT, padx=(0, 15))
 
         self.model_combo = ttk.Combobox(
@@ -522,7 +655,7 @@ class QRScanStationApp:
         )
         self.lbl_pending_status.pack(fill=tk.X, padx=20, pady=(0, 4))
 
-        # 좌측 하단 블루스택 창 도킹 컨테이너
+        # 좌측 하단 LDPlayer 9 도킹 전용 프레임
         cam_panel = tk.Frame(left_panel, bg=BG_PANEL)
         cam_panel.pack(fill=tk.BOTH, expand=True, padx=20, pady=(2, 10))
 
@@ -563,7 +696,7 @@ class QRScanStationApp:
         self.tree.column("Label QR", width=220, anchor="w")
         self.tree.column("DMC", width=210, anchor="w")
         self.tree.column("JUDGMENT", width=75, anchor="center")
-        self.tree.column("Content", width=95, anchor="center")
+        self.tree.column("Content", width=130, anchor="center")
 
         tree_scroll = ttk.Scrollbar(right_panel, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=tree_scroll.set)
@@ -761,7 +894,7 @@ class QRScanStationApp:
         self.tree_recode.column("Label QR", width=220, anchor="w")
         self.tree_recode.column("DMC", width=210, anchor="w")
         self.tree_recode.column("JUDGMENT", width=75, anchor="center")
-        self.tree_recode.column("Content", width=95, anchor="center")
+        self.tree_recode.column("Content", width=130, anchor="center")
 
         scroll_r = ttk.Scrollbar(recode_frame, orient=tk.VERTICAL, command=self.tree_recode.yview)
         self.tree_recode.configure(yscroll=scroll_r.set)
@@ -894,55 +1027,6 @@ class QRScanStationApp:
         x = rx + (rw - width) // 2
         y = ry + (rh - height) // 2
         dialog.geometry(f"{width}x{height}+{max(0, x)}+{max(0, y)}")
-
-    def toggle_manager_mode(self):
-        if self.active_popup or self.pallet_wait_popup:
-            return
-
-        win = tk.Toplevel(self.root)
-        win.configure(bg=BG_PANEL)
-        win.transient(self.root)
-        win.grab_set()
-
-        self.center_popup(win, 360, 210)
-
-        target_state = not self.is_manager_mode
-        if target_state:
-            win.title(self.t("manager_btn") + " ON")
-            msg_text = "MANAGER MODE [ON]\n" + ("관리자 비밀번호를 입력하세요." if self.current_lang.get()=="한국어" else "Enter Admin Password.")
-        else:
-            win.title(self.t("manager_btn") + " OFF")
-            msg_text = "MANAGER MODE [OFF]\n" + ("관리자 비밀번호를 입력하세요." if self.current_lang.get()=="한국어" else "Enter Admin Password.")
-
-        tk.Label(win, text=msg_text, font=("맑은 고딕", 10, "bold"), fg=TEXT_COLOR, bg=BG_PANEL).pack(pady=(15, 8))
-
-        pw_entry = tk.Entry(win, show="*", font=("Arial", 14), justify="center", bg=BG_INPUT, fg="#ffffff")
-        pw_entry.pack(pady=5)
-        pw_entry.focus_set()
-
-        lbl_err = tk.Label(win, text="", font=("맑은 고딕", 9), fg="#ff6b6b", bg=BG_PANEL)
-        lbl_err.pack()
-
-        def verify(event=None):
-            if pw_entry.get() == self.admin_password:
-                self.is_manager_mode = target_state
-                if self.is_manager_mode:
-                    self.btn_manager.config(bg="#28a745", fg="#ffffff", text=self.t("manager_btn_on"))
-                else:
-                    self.btn_manager.config(bg="#2c323d", fg="#adb5bd", text=self.t("manager_btn"))
-                win.destroy()
-                self.scan_entry.focus_set()
-            else:
-                lbl_err.config(text=self.t("pw_err"))
-                pw_entry.delete(0, tk.END)
-
-        pw_entry.bind("<Return>", verify)
-        tk.Button(win, text=self.t("unlock_btn"), command=verify, bg="#28a745" if target_state else "#dc3545", fg="#ffffff",
-                  relief="flat", font=("맑은 고딕", 10, "bold"), padx=15, pady=3).pack(pady=10)
-
-    def auto_turn_off_manager_mode(self):
-        self.is_manager_mode = False
-        self.btn_manager.config(bg="#2c323d", fg="#adb5bd", text=self.t("manager_btn"))
 
     def open_sorting_popup(self, dmc_code):
         dialog = tk.Toplevel(self.root)
@@ -1202,6 +1286,7 @@ class QRScanStationApp:
         curr_model = self.current_model.get()
         target_code = MODEL_CONFIG[curr_model].upper()
 
+        # Pallet QR 스캔 처리
         if self.is_pallet_qr(raw_code):
             upper_pallet_code = raw_code.upper()
 
@@ -1280,7 +1365,7 @@ class QRScanStationApp:
             self.open_sorting_popup(raw_code)
             return
 
-        # Label QR 스캔 (+ REAR 전용 비전 적재 방향 검사)
+        # Label QR 스캔 (+ 비전 적재 방향 검사)
         if is_label_qr:
             curr_box_cnt = self.pallet_state[curr_model]["box_count"]
 
@@ -1318,10 +1403,22 @@ class QRScanStationApp:
                 )
                 return
 
-            # REAR 방향 판정 실행
-            vision_ok, detail = self.inspect_rear_loading_direction(raw_code)
+            # 비전 판정 실행
+            vision_ok, detail = self.inspect_front_loading_direction(raw_code)
             if not vision_ok:
+                # 적재 방향 불량 발생 -> NG 카운트 +1 및 기록
+                self.last_failed_label_code = raw_code
+                self.model_counts[curr_model]["ng"] += 1
+                self.model_counts[curr_model]["total"] += 1
+                self.save_model_counts()
+                self.update_stat_cards()
+
                 self.set_status("방향 NG", "#dc3545", "#3a1c1f")
+                ng_note = f"[적재방향 NG: {detail}]"
+                cur_pallet = self.pallet_state[curr_model]["current_pallet"]
+                self.tree.insert("", 0, values=(cur_pallet, day_str, time_str, raw_code, "[적재 방향 불량]", "NG", ng_note), tags=("ng_row",))
+                self.direct_record_ng_log(curr_model, cur_pallet, raw_code, timestamp_full, ng_note)
+
                 self.open_lock_popup(
                     title_text=self.t("ng_direction_title"),
                     msg=self.t("ng_direction_msg"),
@@ -1329,7 +1426,7 @@ class QRScanStationApp:
                 )
                 return
 
-        # 단품 QR
+        # 단품 QR 스캔 처리
         if not is_label_qr:
             if len(self.pending_items) >= MAX_ITEMS_PER_BOX:
                 self.set_status("NG", "#dc3545", "#3a1c1f")
@@ -1342,6 +1439,7 @@ class QRScanStationApp:
 
             is_already_scanned = (clean_upper_code in self.scanned_history_by_model[curr_model])
 
+            # MANAGER MODE: 중복 샘플 재스캔 1회 통과
             if self.is_manager_mode:
                 if not is_already_scanned:
                     self.set_status("NG", "#dc3545", "#3a1c1f")
@@ -1361,9 +1459,10 @@ class QRScanStationApp:
                         "code": raw_code,
                         "result": "OK"
                     }
-                    self.tree.insert("", 0, values=(cur_p, day_str, time_str, "", raw_code, "OK", ""))
+                    self.tree.insert("", 0, values=(cur_p, day_str, time_str, "", raw_code, "OK", "[DMC 재스캔]"))
                     self.direct_append_single_item(curr_model, item_data)
-                    self.auto_turn_off_manager_mode()
+                    self.is_manager_mode = False
+                    self.btn_manager.config(bg="#2c323d", fg="#adb5bd", text=self.t("manager_btn"))
                     return
 
             else:
@@ -1445,7 +1544,7 @@ class QRScanStationApp:
             bundle_count = len(items_to_bundle)
             header_text = self.t("box_complete", count=bundle_count)
 
-            self.tree.insert("", 0, values=(cur_pallet, day_str, time_str, raw_code, header_text, "OK", ""))
+            self.tree.insert("", 0, values=(cur_pallet, day_str, time_str, raw_code, header_text, "OK", f"[적재방향 OK: {detail}]"))
 
             self.pending_items.clear()
             self.pending_tree_ids.clear()
@@ -1457,7 +1556,7 @@ class QRScanStationApp:
 
             self.root.update_idletasks()
 
-            self.direct_finalize_excel_group(curr_model, cur_pallet, raw_code, timestamp_full, items_to_bundle, header_text)
+            self.direct_finalize_excel_group(curr_model, cur_pallet, raw_code, timestamp_full, items_to_bundle, header_text, extra_content=f"[적재방향 OK: {detail}]")
             self.refresh_grouping_tab()
 
             if self.pallet_state[curr_model]["box_count"] >= MAX_BOXES_PER_PALLET:
@@ -1465,6 +1564,9 @@ class QRScanStationApp:
 
         self.scan_entry.focus_set()
 
+    # ==========================================
+    # 6. 엑셀 8개 열 기록 로직
+    # ==========================================
     def open_or_init_workbook(self, filepath):
         unhide_file(filepath)
         if os.path.exists(filepath):
@@ -1512,7 +1614,7 @@ class QRScanStationApp:
         ws.column_dimensions['E'].width = 34
         ws.column_dimensions['F'].width = 20
         ws.column_dimensions['G'].width = 14
-        ws.column_dimensions['H'].width = 16
+        ws.column_dimensions['H'].width = 18
 
         ws_sort = wb.create_sheet(title="sorting")
         ws_sort.cell(row=1, column=2, value="Sorting 대상 DMC Code")
@@ -1621,7 +1723,7 @@ class QRScanStationApp:
             except Exception as e:
                 pass
 
-    def direct_finalize_excel_group(self, model_name, pallet_code, box_qr, box_time, items, header_text):
+    def direct_finalize_excel_group(self, model_name, pallet_code, box_qr, box_time, items, header_text, extra_content=""):
         with self.file_lock:
             try:
                 filename = get_quarter_filename(model_name)
@@ -1645,12 +1747,42 @@ class QRScanStationApp:
                     top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9')
                 )
 
-                header_row = [pallet_code, box_qr, box_time, "HEADER", header_text, box_time, "OK", ""]
+                header_row = [pallet_code, box_qr, box_time, "HEADER", header_text, box_time, "OK", extra_content]
                 ws.append(header_row)
                 h_row_idx = ws.max_row
                 for col in range(1, 9):
                     c = ws.cell(row=h_row_idx, column=col)
                     c.border = thin_border
+                    c.alignment = Alignment(horizontal="center" if col in [3, 4, 6, 7, 8] else "left", vertical="center")
+
+                wb.save(filepath)
+                hide_file(filepath)
+            except Exception as e:
+                pass
+
+    def direct_record_ng_log(self, model_name, pallet_code, label_code, timestamp_full, extra_content):
+        """적재 방향 불량 발생 시 엑셀에 NG 이력 기록"""
+        with self.file_lock:
+            try:
+                filename = get_quarter_filename(model_name)
+                filepath = os.path.join(BASE_DIR, filename)
+                wb, ws = self.open_or_init_workbook(filepath)
+
+                ng_fill = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
+                ng_font = Font(name="맑은 고딕", size=10, bold=True, color="C00000")
+                thin_border = Border(
+                    left=Side(style='thin', color='D9D9D9'), right=Side(style='thin', color='D9D9D9'),
+                    top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9')
+                )
+
+                row_data = [pallet_code, label_code, timestamp_full, "-", "[적재 방향 불량]", timestamp_full, "NG", extra_content]
+                ws.append(row_data)
+                h_idx = ws.max_row
+                for col in range(1, 9):
+                    c = ws.cell(row=h_idx, column=col)
+                    c.border = thin_border
+                    c.fill = ng_fill
+                    c.font = ng_font
                     c.alignment = Alignment(horizontal="center" if col in [3, 4, 6, 7, 8] else "left", vertical="center")
 
                 wb.save(filepath)
@@ -1916,7 +2048,7 @@ class QRScanStationApp:
             ws.column_dimensions['D'].width = 46
             ws.column_dimensions['E'].width = 34
             ws.column_dimensions['F'].width = 12
-            ws.column_dimensions['G'].width = 16
+            ws.column_dimensions['G'].width = 18
 
             wb.save(save_path)
             messagebox.showinfo("Success", f"Saved successfully:\n{save_path}")
