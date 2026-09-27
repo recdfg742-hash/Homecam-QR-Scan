@@ -30,14 +30,14 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # ==========================================
-# 1. FRONT 전용 모델 및 카메라 설정
+# 1. REAR 전용 모델 및 카메라 설정
 # ==========================================
 MODEL_CONFIG = {
-    'S-FRONT': 'MPL02916AD',
-    'R-FRONT': 'MPL02926AD'
+    'S-REAR':  'MPL02914AD',
+    'R-REAR':  'MPL02925AD'
 }
 
-TARGET_CAM_NAME = "Aluko 3"
+TARGET_CAM_NAME = "Aluko 4"
 CODE_TO_MODEL = {v: k for k, v in MODEL_CONFIG.items()}
 DEFAULT_PASSWORD = "123456"
 MAX_ITEMS_PER_BOX = 10
@@ -49,9 +49,9 @@ def get_base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 BASE_DIR = get_base_dir()
-COUNT_FILE = os.path.join(BASE_DIR, "counts_front.json")
-STATE_FILE = os.path.join(BASE_DIR, "pallet_state_front.json")
-CAPTURE_DIR = os.path.join(BASE_DIR, "captures_front")
+COUNT_FILE = os.path.join(BASE_DIR, "counts_rear.json")
+STATE_FILE = os.path.join(BASE_DIR, "pallet_state_rear.json")
+CAPTURE_DIR = os.path.join(BASE_DIR, "captures_rear")
 os.makedirs(CAPTURE_DIR, exist_ok=True)
 
 FILE_ATTRIBUTE_NORMAL = 0x80
@@ -81,7 +81,7 @@ def get_quarter_filename(model_name, dt=None):
 
 LANG_PACK = {
     "한국어": {
-        "title": "QR SCAN STATION [FRONT]",
+        "title": "QR SCAN STATION [REAR]",
         "pw_setting": "⚙ 비밀번호 설정",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -119,8 +119,8 @@ LANG_PACK = {
         "ng_pallet_model_msg": "[NG: Pallet QR 모델 코드가 일치하지 않습니다]\n\n현재 선택 모델: {model} ({target})\n스캔 Pallet QR: {code}\n\n올바른 Pallet QR을 준비한 뒤 관리자 비밀번호로 해제하세요.",
         "ng_pallet_dup_title": "🚫 NG - Pallet QR 중복/순서 오류",
         "ng_pallet_dup_msg": "[NG: Pallet QR 중복 리딩 또는 박스 미완료]\n\n1) 최소 1개 이상의 박스를 완료한 후에만 팔레트 교체가 가능합니다.\n2) 이미 사용된 Pallet QR은 중복 등록할 수 없습니다.\n\n관리자 비밀번호를 입력하여 해제하세요.",
-        "ng_direction_title": "🚫 NG - 제품 적재 방향 오류",
-        "ng_direction_msg": "[비전 판정 NG: 제품 적입 방향 불일치]\n\nFRONT 제품 완충 패킹 블록 방향이 맞지 않습니다.\n은색 알루미늄 가공면이 위로 노출되었습니다.\n\n제품을 올바른 방향으로 재적재한 후 관리자 비밀번호를 입력하세요.",
+        "ng_orientation_title": "🚫 NG - 제품 적재 방향 오류",
+        "ng_orientation_msg": "[비전 판정 NG: 제품 적입 방향 불일치]\n\nREAR 제품의 상단 방향이 올바르지 않습니다.\n은색 알루미늄 가공면이 보이지 않고 검은색 면이 노출되었습니다.\n\n제품을 올바른 방향으로 재적재한 후 관리자 비밀번호를 입력하세요.",
         "ng_label_dup_title": "⚠️ Label QR NG - 중복 스캔",
         "ng_label_dup_msg": "[Label QR NG: 이미 사용된 Label QR입니다]\n\n스캔 Label QR: {code}...\n이미 등록/포장 완료된 중복 라벨입니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_group_title": "⚠️ Grouping NG - 수량 불일치",
@@ -154,13 +154,13 @@ ACCENT_YELLOW = "#f59f00"
 class QRScanStationApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("QR SCAN STATION [FRONT]")
+        self.root.title("QR SCAN STATION [REAR]")
         self.root.geometry("1440x880")
         self.root.minsize(1280, 780)
         self.root.configure(bg=BG_MAIN)
 
         self.current_lang = tk.StringVar(value="한국어")
-        self.current_model = tk.StringVar(value='S-FRONT')
+        self.current_model = tk.StringVar(value='S-REAR')
         self.admin_password = DEFAULT_PASSWORD
         self.model_session_id = 0
 
@@ -193,7 +193,7 @@ class QRScanStationApp:
         self.setup_global_key_listener()
         self.on_model_changed()
 
-        # 블루스택 5 자동 기동 및 특정 홈캠 화면 도킹
+        # 블루스택 5 자동 구동 및 Aluko 4 카메라 도킹
         self.start_bluestacks_automation()
 
     def t(self, key, **kwargs):
@@ -211,12 +211,9 @@ class QRScanStationApp:
                     time.sleep(0.08)
         threading.Thread(target=_beep, daemon=True).start()
 
-    # ==========================================
-    # 블루스택 5 구동 -> Mi Home/Aluko 3 -> 도킹
-    # ==========================================
     def start_bluestacks_automation(self):
         def _auto():
-            # 1. 블루스택 5 경로 탐색 및 기동
+            # 1. 블루스택 5 실행
             bs_paths = [
                 r"C:\Program Files\BlueStacks_nxt\HD-Player.exe",
                 r"C:\Program Files (x86)\BlueStacks_nxt\HD-Player.exe"
@@ -228,7 +225,7 @@ class QRScanStationApp:
                     subprocess.Popen([bs_exe])
                     time.sleep(10)
 
-            # 2. ADB 명령으로 Mi Home 실행
+            # 2. Mi Home 앱 구동
             adb_path = r"C:\Program Files\BlueStacks_nxt\HD-Adb.exe"
             if os.path.exists(adb_path):
                 try:
@@ -237,7 +234,7 @@ class QRScanStationApp:
                 except Exception:
                     pass
 
-            # 3. 블루스택 창을 좌측 하단 네모 칸 안으로 도킹
+            # 3. 블루스택 창 내부 도킹
             while self.is_monitoring_running and not self.embedded_window_hwnd:
                 try:
                     if gw and win32gui:
@@ -265,10 +262,7 @@ class QRScanStationApp:
 
         threading.Thread(target=_auto, daemon=True).start()
 
-    # ==========================================
-    # 비전 적재 방향 검사 (도킹된 화면 캡처)
-    # ==========================================
-    def inspect_front_loading_direction(self, label_code):
+    def inspect_rear_loading_direction(self, label_code):
         if not (CV_AVAILABLE and pyautogui):
             return True, "vision_module_missing"
 
@@ -288,7 +282,7 @@ class QRScanStationApp:
             roi = frame[int(h*0.25):int(h*0.85), int(w*0.25):int(w*0.85)]
             gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
 
-            bright_pixels = np.sum(gray_roi > 170)
+            bright_pixels = np.sum(gray_roi > 160)
             total_pixels = gray_roi.size
             bright_ratio = bright_pixels / total_pixels
 
@@ -297,8 +291,8 @@ class QRScanStationApp:
             capture_path = os.path.join(CAPTURE_DIR, f"{now_str}_{safe_name}.jpg")
             cv2.imwrite(capture_path, frame)
 
-            # 은색 면이 위로 올라오면 NG 발생 (1번 사진 기준)
-            if bright_ratio > 0.12:
+            # REAR 기준: 은색 알루미늄 면이 위로 올라와 밝아야 OK (4번 사진 기준)
+            if bright_ratio < 0.15:
                 return False, f"bright_ratio={bright_ratio:.3f}"
             return True, f"bright_ratio={bright_ratio:.3f}"
 
@@ -387,7 +381,7 @@ class QRScanStationApp:
         header_frame = tk.Frame(self.root, bg=BG_MAIN, height=45)
         header_frame.pack(fill=tk.X, padx=20, pady=(10, 4))
 
-        tk.Label(header_frame, text="QR  SCAN  STATION  [FRONT]", font=("Arial", 12, "bold"), 
+        tk.Label(header_frame, text="QR  SCAN  STATION  [REAR]", font=("Arial", 12, "bold"), 
                  fg=TEXT_COLOR, bg=BG_MAIN).pack(side=tk.LEFT, padx=(0, 15))
 
         self.model_combo = ttk.Combobox(
@@ -528,7 +522,7 @@ class QRScanStationApp:
         )
         self.lbl_pending_status.pack(fill=tk.X, padx=20, pady=(0, 4))
 
-        # 좌측 하단 블루스택 창 도킹 전용 프레임
+        # 좌측 하단 블루스택 창 도킹 컨테이너
         cam_panel = tk.Frame(left_panel, bg=BG_PANEL)
         cam_panel.pack(fill=tk.BOTH, expand=True, padx=20, pady=(2, 10))
 
@@ -1286,7 +1280,7 @@ class QRScanStationApp:
             self.open_sorting_popup(raw_code)
             return
 
-        # Label QR 스캔 (+ 비전 적재 방향 자동 검사)
+        # Label QR 스캔 (+ REAR 전용 비전 적재 방향 검사)
         if is_label_qr:
             curr_box_cnt = self.pallet_state[curr_model]["box_count"]
 
@@ -1324,8 +1318,8 @@ class QRScanStationApp:
                 )
                 return
 
-            # 비전 적재 방향 판정 실행
-            vision_ok, detail = self.inspect_front_loading_direction(raw_code)
+            # REAR 방향 판정 실행
+            vision_ok, detail = self.inspect_rear_loading_direction(raw_code)
             if not vision_ok:
                 self.set_status("방향 NG", "#dc3545", "#3a1c1f")
                 self.open_lock_popup(
