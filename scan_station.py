@@ -5,6 +5,7 @@ import time
 import glob
 import ctypes
 import threading
+import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
@@ -15,7 +16,6 @@ try:
     import pyautogui
     import pygetwindow as gw
     import win32gui
-    from PIL import Image, ImageTk
     CV_AVAILABLE = True
 except ImportError:
     CV_AVAILABLE = False
@@ -30,13 +30,14 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # ==========================================
-# 1. FRONT 전용 모델 설정
+# 1. FRONT 전용 모델 및 카메라 설정
 # ==========================================
 MODEL_CONFIG = {
     'S-FRONT': 'MPL02916AD',
     'R-FRONT': 'MPL02926AD'
 }
 
+TARGET_CAM_NAME = "Aluko 3"
 CODE_TO_MODEL = {v: k for k, v in MODEL_CONFIG.items()}
 DEFAULT_PASSWORD = "123456"
 MAX_ITEMS_PER_BOX = 10
@@ -119,7 +120,7 @@ LANG_PACK = {
         "ng_pallet_dup_title": "🚫 NG - Pallet QR 중복/순서 오류",
         "ng_pallet_dup_msg": "[NG: Pallet QR 중복 리딩 또는 박스 미완료]\n\n1) 최소 1개 이상의 박스를 완료한 후에만 팔레트 교체가 가능합니다.\n2) 이미 사용된 Pallet QR은 중복 등록할 수 없습니다.\n\n관리자 비밀번호를 입력하여 해제하세요.",
         "ng_direction_title": "🚫 NG - 제품 적재 방향 오류",
-        "ng_direction_msg": "[비전 판정 NG: 제품 적입 방향 불일치]\n\nFRONT 제품의 완충 패킹 블록 방향이 올바르지 않습니다.\n은색 알루미늄 가공면이 위로 노출되었습니다.\n\n제품을 올바른 방향으로 재적재한 후 관리자 비밀번호를 입력하세요.",
+        "ng_direction_msg": "[비전 판정 NG: 제품 적입 방향 불일치]\n\nFRONT 제품 완충 패킹 블록 방향이 맞지 않습니다.\n은색 알루미늄 가공면이 위로 노출되었습니다.\n\n제품을 올바른 방향으로 재적재한 후 관리자 비밀번호를 입력하세요.",
         "ng_label_dup_title": "⚠️ Label QR NG - 중복 스캔",
         "ng_label_dup_msg": "[Label QR NG: 이미 사용된 Label QR입니다]\n\n스캔 Label QR: {code}...\n이미 등록/포장 완료된 중복 라벨입니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_group_title": "⚠️ Grouping NG - 수량 불일치",
@@ -139,128 +140,6 @@ LANG_PACK = {
         "unlock_btn": "확인 및 잠금 해제",
         "confirm_btn": "확인 (Enter)",
         "pw_err": "비밀번호가 올바르지 않습니다."
-    },
-    "English": {
-        "title": "QR SCAN STATION [FRONT]",
-        "pw_setting": "⚙ Password Setting",
-        "tab_scan": "  QR Scan  ",
-        "tab_grouping": "  Grouping  ",
-        "tab_recode": "  Re-code  ",
-        "model_label": "Model",
-        "code_label": "Part No",
-        "last_scan": "Last Scan",
-        "input_guide": "Barcode Scan Input (Focus anywhere)",
-        "reset_btn": "RESET (Clear Counter)",
-        "manager_btn": "MANAGER MODE",
-        "manager_btn_on": "MANAGER MODE [ON]",
-        "pending_status": "Ungrouped: {count} pcs – Waiting for Label QR",
-        "pallet_status": "Current Pallet: {pallet} ({boxes}/{max_b} Boxes)",
-        "record_header": "{model} Records",
-        "grouping_header": "{model} Pallet - Box Grouping Overview",
-        "th_pallet": "Pallet Label QR",
-        "th_box_seq": "Box Seq",
-        "th_day": "DAY",
-        "th_time": "TIME",
-        "th_label": "Label QR",
-        "th_dmc": "DMC",
-        "th_judgment": "JUDGMENT",
-        "th_content": "Content",
-        "filter_day": "Date Range:",
-        "filter_time": "Time Range:",
-        "search_btn": "🔍 Search",
-        "save_btn": "💾 Save (Excel Export)",
-        "box_complete": "[Box Grouping Done: {count} pcs]",
-        "dup_scan_tag": "[Duplicate Scan]",
-        "sorting_title": "⚠️ Sorting Required Alert",
-        "sorting_msg": "[Alert: Sorting Required Product]\n\nDMC Code: {code}\n\nThis product is registered in the Sorting list.\nIsolate the part and press [Enter] to continue.",
-        "ng_model_title": "⚠️ NG - Model Mismatch",
-        "ng_model_msg": "[NG: Scanned barcode does not match selected model]\n\nSelected Model: {model} ({target})\nScanned Code: {code}\n\nEnter 6-digit Admin Password to unlock.",
-        "ng_pallet_model_title": "⚠️ NG - Pallet Model Mismatch",
-        "ng_pallet_model_msg": "[NG: Pallet QR model code does not match]\n\nSelected Model: {model} ({target})\nScanned Pallet QR: {code}\n\nEnter 6-digit Admin Password to unlock.",
-        "ng_pallet_dup_title": "🚫 NG - Duplicate Pallet Scan",
-        "ng_pallet_dup_msg": "[NG: Pallet QR Duplicate or Sequence Error]\n\n1) At least 1 box must be completed before closing the pallet.\n2) Cannot re-scan an already closed Pallet QR.\n\nEnter Admin Password to unlock.",
-        "ng_direction_title": "🚫 NG - Part Loading Direction Error",
-        "ng_direction_msg": "[Vision NG: Incorrect Loading Direction]\n\nFRONT parts are loaded in reverse.\nSilver aluminum surface detected instead of black packing ribs.\n\nReload parts correctly and enter Admin Password.",
-        "ng_label_dup_title": "⚠️ Label QR NG - Duplicate Label",
-        "ng_label_dup_msg": "[Label QR NG: This Label QR is already used]\n\nScanned Label: {code}...\nDuplicate box label detected.\n\nEnter 6-digit Admin Password to unlock.",
-        "ng_group_title": "⚠️ Grouping NG - Quantity Mismatch",
-        "ng_group_msg": "[Grouping NG: Scanned quantity does not match Label quantity]\n\nLabel Target Qty: {expected} pcs\nCurrently Scanned Qty: {current} pcs\n\nCannot proceed with grouping.\nEnter 6-digit Admin Password to unlock.",
-        "ng_limit_title": "⚠️ NG - Label QR Missing",
-        "ng_limit_msg": "[NG: Label QR Missing]\n\nAlready reached maximum capacity ({max_cnt} pcs).\n11th item is rejected and not saved.\nScan Label QR first to complete the box.\n\nEnter 6-digit Admin Password to unlock.",
-        "ng_mgr_err_title": "⚠️ NG - Manager Mode Error",
-        "ng_mgr_err_msg": "[NG: New QR must be scanned in Normal Mode]\n\nScanned Barcode: {code}\nNew parts cannot be added under Manager Mode.\nScan discarded.\n\nEnter 6-digit Admin Password to unlock.",
-        "ng_dup_title": "🚫 QR NG - Duplicate Part Detected",
-        "ng_dup_msg": "[QR NG: Duplicate part barcode detected]\n\nScanned Barcode: {code}\nThis part and associated Box Header are marked as NG.\n\nEnter 6-digit Admin Password to unlock.",
-        "ng_pallet_mid_title": "⚠️ NG - Invalid Pallet Scan Timing",
-        "ng_pallet_mid_msg": "[NG: Cannot scan Pallet QR while box packing is in progress]\n\nCurrently {count} items are pending.\nFinish 10 items and Label QR before scanning Pallet QR.",
-        "ng_pallet_limit_title": "🚫 NG - Pallet QR Missing (Exceeded 12 Boxes)",
-        "ng_pallet_limit_msg": "[NG: Pallet QR Missing]\n\n12 boxes are already filled.\nCannot pack 13th box without scanning a new Pallet QR.\n\nEnter Admin Password to unlock.",
-        "pallet_popup_title": "Waiting for Pallet QR",
-        "pallet_popup_msg": "12 boxes completed on current pallet.\nPlease scan new Pallet QR.",
-        "unlock_btn": "Confirm & Unlock",
-        "confirm_btn": "Confirm (Enter)",
-        "pw_err": "Incorrect Password."
-    },
-    "Polski": {
-        "title": "QR SCAN STATION [FRONT]",
-        "pw_setting": "⚙ Ustawienie hasła",
-        "tab_scan": "  Skan QR  ",
-        "tab_grouping": "  Grupowanie  ",
-        "tab_recode": "  Re-code  ",
-        "model_label": "Model",
-        "code_label": "Kod części",
-        "last_scan": "Ostatni skan",
-        "input_guide": "Wejście skanera (skanuj w dowolnym miejscu)",
-        "reset_btn": "RESET (Zeruj licznik)",
-        "manager_btn": "TRYB MENEDŻERA",
-        "manager_btn_on": "TRYB MENEDŻERA [ON]",
-        "pending_status": "Oczekujące: {count} szt. – Oczekiwanie na Label QR",
-        "pallet_status": "Bieżąca paleta: {pallet} ({boxes}/{max_b} pudełek)",
-        "record_header": "{model} Historia",
-        "grouping_header": "{model} Przegląd grupowania Paleta - Pudełko",
-        "th_pallet": "Pallet Label QR",
-        "th_box_seq": "Nr pudełka",
-        "th_day": "DZIEŃ",
-        "th_time": "CZAS",
-        "th_label": "Label QR",
-        "th_dmc": "DMC",
-        "th_judgment": "STATUS",
-        "th_content": "Treść",
-        "filter_day": "Zakres dat:",
-        "filter_time": "Przedział czasu:",
-        "search_btn": "🔍 Szukaj",
-        "save_btn": "💾 Zapisz (Eksport Excel)",
-        "box_complete": "[Pakiet ukończony: {count} szt.]",
-        "dup_scan_tag": "[Duplikat skanu]",
-        "sorting_title": "⚠️ Wymagane sortowanie",
-        "sorting_msg": "[Uwaga: Wymagane sortowanie produktu]\n\nKod DMC: {code}\n\nTen produkt znajduje się na liście sortowania.\nOdizoluj część i naciśnij [Enter], aby kontynuować.",
-        "ng_model_title": "⚠️ NG - Niezgodność modelu",
-        "ng_model_msg": "[NG: Zeskanowany kod nie pasuje do wybranego modelu]\n\nWybrany model: {model} ({target})\nKod: {code}\n\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
-        "ng_pallet_model_title": "⚠️ NG - Niezgodność modelu palety",
-        "ng_pallet_model_msg": "[NG: Kod modelu na etykiecie palety nie pasuje]\n\nWybrany model: {model} ({target})\nPaleta: {code}\n\nWprowadź 6-cyfrowe hasło administratora.",
-        "ng_pallet_dup_title": "🚫 NG - Błąd duplikatu palety",
-        "ng_pallet_dup_msg": "[NG: Błąd skanowania palety]\n\n1) Należy ukończyć co najmniej 1 pudełko przed zamknięciem palety.\n2) Nie można ponownie użyć zarejestrowanej palety.\n\nWprowadź hasło administratora.",
-        "ng_direction_title": "🚫 NG - Błąd kierunku włożenia części",
-        "ng_direction_msg": "[Wizja NG: Nieprawidłowy kierunek ułożenia części FRONT]\n\nWykryto jasną powierzchnię aluminiową zamiast czarnych elementów tłumiących.\n\nPopraw ułożenie części i wprowadź hasło administratora.",
-        "ng_label_dup_title": "⚠️ Label QR NG - Duplikat etykiety",
-        "ng_label_dup_msg": "[Label QR NG: Ta etykieta została 이미 사용되었습니다]\n\nZeskanowana etykieta: {code}...\nWykryto duplikat etykiety pudełka.\n\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
-        "ng_group_title": "⚠️ Grouping NG - Niezgodność ilości",
-        "ng_group_msg": "[Grouping NG: Ilość sztuk nie zgadza się z etykietą]\n\nIlość na etykiecie: {expected} szt.\nZeskanowano: {current} szt.\n\nNie można utworzyć grupy.\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
-        "ng_limit_title": "⚠️ NG - Brak Label QR",
-        "ng_limit_msg": "[NG: Brak Label QR]\n\nOsiągnięto limit pudełka ({max_cnt} szt.).\n11. element nie został zapisany.\nZeskanuj najpierw Label QR.\n\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
-        "ng_mgr_err_title": "⚠️ NG - Błąd trybu menedżera",
-        "ng_mgr_err_msg": "[NG: Nowe części należy skanować w trybie standardowym]\n\nZeskanowany kod: {code}\nNowy element został odrzucony.\n\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
-        "ng_dup_title": "🚫 QR NG - Wykryto zduplikowany element",
-        "ng_dup_msg": "[QR NG: Kod tego elementu został 이미 이전 기록에 있습니다]\n\nZeskanowany kod: {code}\nTen element i nagłówek partii oznaczono jako NG.\n\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
-        "ng_pallet_mid_title": "⚠️ NG - Błędny moment skanowania palety",
-        "ng_pallet_mid_msg": "[NG: Nie można skanować kodu palety podczas pakowania pudełka]\n\nObecnie oczekuje {count} elementów.\nZakończ 10 sztuk i Label QR przed zeskanowaniem palety.",
-        "ng_pallet_limit_title": "🚫 NG - Brak kodu palety (Przekroczono 12 pudełek)",
-        "ng_pallet_limit_msg": "[NG: Wymagany nowy kod palety]\n\nZapakowano już 12 pudełek.\nNie można kontynuować 13. pudełka bez nowej palety.\n\nWprowadź hasło administratora.",
-        "pallet_popup_title": "Oczekiwanie na kod palety",
-        "pallet_popup_msg": "Ukończono 12 pudełek na palecie.\nZeskanuj kod nowej palety.",
-        "unlock_btn": "Potwierdź i odblokuj",
-        "confirm_btn": "Potwierdź (Enter)",
-        "pw_err": "Nieprawidłowe hasło."
     }
 }
 
@@ -270,8 +149,6 @@ BG_INPUT = "#15181e"
 TEXT_COLOR = "#e1e4ea"
 TEXT_MUTED = "#8b949e"
 ACCENT_YELLOW = "#f59f00"
-COLOR_OK = "#28a745"
-COLOR_NG = "#dc3545"
 
 
 class QRScanStationApp:
@@ -316,8 +193,8 @@ class QRScanStationApp:
         self.setup_global_key_listener()
         self.on_model_changed()
 
-        # 블루스택 창을 좌측 하단 프레임 안으로 도킹시키는 스레드 시작
-        self.start_embed_monitor()
+        # 블루스택 5 자동 기동 및 특정 홈캠 화면 도킹
+        self.start_bluestacks_automation()
 
     def t(self, key, **kwargs):
         pack = LANG_PACK.get(self.current_lang.get(), LANG_PACK["한국어"])
@@ -335,53 +212,67 @@ class QRScanStationApp:
         threading.Thread(target=_beep, daemon=True).start()
 
     # ==========================================
-    # 블루스택 창을 UI 내부로 강제 도킹 (Windows API)
+    # 블루스택 5 구동 -> Mi Home/Aluko 3 -> 도킹
     # ==========================================
-    def start_embed_monitor(self):
-        def _monitor():
-            while self.is_monitoring_running:
+    def start_bluestacks_automation(self):
+        def _auto():
+            # 1. 블루스택 5 경로 탐색 및 기동
+            bs_paths = [
+                r"C:\Program Files\BlueStacks_nxt\HD-Player.exe",
+                r"C:\Program Files (x86)\BlueStacks_nxt\HD-Player.exe"
+            ]
+            bs_exe = next((p for p in bs_paths if os.path.exists(p)), None)
+            if bs_exe:
+                targets = [w for w in gw.getAllWindows() if 'bluestacks' in w.title.lower()] if gw else []
+                if not targets:
+                    subprocess.Popen([bs_exe])
+                    time.sleep(10)
+
+            # 2. ADB 명령으로 Mi Home 실행
+            adb_path = r"C:\Program Files\BlueStacks_nxt\HD-Adb.exe"
+            if os.path.exists(adb_path):
+                try:
+                    subprocess.run([adb_path, "shell", "monkey", "-p", "com.xiaomi.smarthome", "-c", "android.intent.category.LAUNCHER", "1"], 
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+
+            # 3. 블루스택 창을 좌측 하단 네모 칸 안으로 도킹
+            while self.is_monitoring_running and not self.embedded_window_hwnd:
                 try:
                     if gw and win32gui:
-                        # 캡처에 보이는 'BlueStacks App Player' 창 탐색
-                        targets = [w for w in gw.getAllWindows() if any(k in w.title.lower() for k in ['bluestacks', 'xiaomi', 'mi home', '미홈', '샤오미'])]
-                        if targets and not self.embedded_window_hwnd:
+                        targets = [w for w in gw.getAllWindows() if 'bluestacks' in w.title.lower()]
+                        if targets:
                             win = targets[0]
                             hwnd = win._hWnd
                             parent_hwnd = self.cam_container.winfo_id()
 
-                            # 창 스타일 변경 (타이틀바, 테두리 제거)
-                            style = win32gui.GetWindowLong(hwnd, -16)  # GWL_STYLE
-                            style &= ~0x00C00000  # WS_CAPTION 제거
-                            style &= ~0x00040000  # WS_SIZEBOX 제거
-                            style |= 0x40000000   # WS_CHILD 추가
+                            style = win32gui.GetWindowLong(hwnd, -16)
+                            style &= ~0x00C00000
+                            style &= ~0x00040000
+                            style |= 0x40000000
                             win32gui.SetWindowLong(hwnd, -16, style)
 
-                            # 우리 Tkinter 프레임 안으로 부모 설정
                             win32gui.SetParent(hwnd, parent_hwnd)
                             win32gui.MoveWindow(hwnd, 0, 0, 390, 230, True)
 
                             self.embedded_window_hwnd = hwnd
-                            self.root.after(0, lambda: self.lbl_cam_status.config(text="● LIVE (블루스택 홈캠 도킹 완료)", fg="#22c55e"))
+                            self.root.after(0, lambda: self.lbl_cam_status.config(text=f"● LIVE ({TARGET_CAM_NAME} 연동 완료)", fg="#22c55e"))
+                            break
                 except Exception:
                     pass
                 time.sleep(1.0)
 
-        threading.Thread(target=_monitor, daemon=True).start()
+        threading.Thread(target=_auto, daemon=True).start()
 
     # ==========================================
-    # 비전 적재 방향 검사 (도킹된 홈캠 화면 캡처)
+    # 비전 적재 방향 검사 (도킹된 화면 캡처)
     # ==========================================
     def inspect_front_loading_direction(self, label_code):
-        """
-        FRONT 판정:
-        - 1번 사진(NG): 은색 알루미늄 가공면이 위로 노출 (밝은 픽셀 비율 급증)
-        - 2번 사진(OK): 검은색 완충 패킹 블록이 정렬 (어두운 영역 우세)
-        """
         if not (CV_AVAILABLE and pyautogui):
-            return True, "vision_library_missing"
+            return True, "vision_module_missing"
 
         try:
-            # 좌측 하단 도킹 컨테이너 화면 직접 캡처
             self.root.update_idletasks()
             x = self.cam_container.winfo_rootx()
             y = self.cam_container.winfo_rooty()
@@ -389,27 +280,24 @@ class QRScanStationApp:
             h = self.cam_container.winfo_height()
 
             if w < 50 or h < 50:
-                return True, "camera_frame_too_small"
+                return True, "cam_frame_too_small"
 
             shot = pyautogui.screenshot(region=(x, y, w, h))
             frame = cv2.cvtColor(np.array(shot), cv2.COLOR_RGB2BGR)
 
-            # 박스 내부 중심부 ROI 분석 (상하 25%~85%, 좌우 25%~85%)
             roi = frame[int(h*0.25):int(h*0.85), int(w*0.25):int(w*0.85)]
             gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
 
-            # 은색 가공면의 밝은 픽셀(170 이상) 검출
             bright_pixels = np.sum(gray_roi > 170)
             total_pixels = gray_roi.size
             bright_ratio = bright_pixels / total_pixels
 
-            # 캡처 파일 자동 저장
             now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
             safe_name = label_code.replace(";", "_")[:20]
             capture_path = os.path.join(CAPTURE_DIR, f"{now_str}_{safe_name}.jpg")
             cv2.imwrite(capture_path, frame)
 
-            # 1번 사진처럼 은색 면이 위로 올라오면 NG 발생 (기준치: 0.12)
+            # 은색 면이 위로 올라오면 NG 발생 (1번 사진 기준)
             if bright_ratio > 0.12:
                 return False, f"bright_ratio={bright_ratio:.3f}"
             return True, f"bright_ratio={bright_ratio:.3f}"
@@ -640,16 +528,14 @@ class QRScanStationApp:
         )
         self.lbl_pending_status.pack(fill=tk.X, padx=20, pady=(0, 4))
 
-        # ==========================================
-        # [신규] 좌측 하단 블루스택 창 도킹 컨테이너
-        # ==========================================
+        # 좌측 하단 블루스택 창 도킹 전용 프레임
         cam_panel = tk.Frame(left_panel, bg=BG_PANEL)
         cam_panel.pack(fill=tk.BOTH, expand=True, padx=20, pady=(2, 10))
 
         top_info = tk.Frame(cam_panel, bg=BG_PANEL)
         top_info.pack(fill=tk.X)
-        tk.Label(top_info, text="📷 실시간 홈캠 뷰어", font=("맑은 고딕", 9, "bold"), fg="#38bdf8", bg=BG_PANEL).pack(side=tk.LEFT)
-        self.lbl_cam_status = tk.Label(top_info, text="○ 대기 중...", font=("맑은 고딕", 8, "bold"), fg="#f87171", bg=BG_PANEL)
+        tk.Label(top_info, text=f"📷 실시간 홈캠 뷰어 [{TARGET_CAM_NAME}]", font=("맑은 고딕", 9, "bold"), fg="#38bdf8", bg=BG_PANEL).pack(side=tk.LEFT)
+        self.lbl_cam_status = tk.Label(top_info, text="○ 연결 대기 중...", font=("맑은 고딕", 8, "bold"), fg="#f87171", bg=BG_PANEL)
         self.lbl_cam_status.pack(side=tk.RIGHT)
 
         self.cam_container = tk.Frame(cam_panel, width=390, height=230, bg="#0f172a", highlightthickness=1, highlightbackground="#334155")
@@ -1322,7 +1208,6 @@ class QRScanStationApp:
         curr_model = self.current_model.get()
         target_code = MODEL_CONFIG[curr_model].upper()
 
-        # Pallet QR 스캔 처리
         if self.is_pallet_qr(raw_code):
             upper_pallet_code = raw_code.upper()
 
@@ -1374,7 +1259,6 @@ class QRScanStationApp:
             self.set_status("OK", "#28a745", "#193322")
             return
 
-        # 일반 바코드 (단품 및 Label QR) 처리
         current_time = time.time()
         if raw_code == self.last_scanned_code and (current_time - self.last_scanned_time) < 2.0:
             return
@@ -1402,7 +1286,7 @@ class QRScanStationApp:
             self.open_sorting_popup(raw_code)
             return
 
-        # Label QR 스캔 (+ 비전 적재 방향 자동 판정)
+        # Label QR 스캔 (+ 비전 적재 방향 자동 검사)
         if is_label_qr:
             curr_box_cnt = self.pallet_state[curr_model]["box_count"]
 
@@ -1440,7 +1324,7 @@ class QRScanStationApp:
                 )
                 return
 
-            # 비전 방향 판정 실행
+            # 비전 적재 방향 판정 실행
             vision_ok, detail = self.inspect_front_loading_direction(raw_code)
             if not vision_ok:
                 self.set_status("방향 NG", "#dc3545", "#3a1c1f")
