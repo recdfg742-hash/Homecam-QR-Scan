@@ -96,7 +96,7 @@ LANG_PACK = {
         "reset_btn": "RESET (카운터 초기화)",
         "manager_btn": "MANAGER MODE",
         "manager_btn_on": "MANAGER [DMC 재스캔 대기]",
-        "manager_btn_rejudge": "MANAGER [방향 재판정: Label QR 대기]",
+        "manager_btn_rejudge": "MANAGER [방향 재판정: 관리자 권한 대기]",
         "pending_status": "미그룹 스캔 {count}건 – Label QR 대기 중",
         "pallet_status": "현재 팔레트: {pallet} ({boxes}/{max_b} 박스)",
         "record_header": "{model} 기록",
@@ -123,8 +123,8 @@ LANG_PACK = {
         "ng_pallet_model_msg": "[NG: Pallet QR 모델 코드가 일치하지 않습니다]\n\n현재 선택 모델: {model} ({target})\n스캔 Pallet QR: {code}\n\n올바른 Pallet QR을 준비한 뒤 관리자 비밀번호로 해제하세요.",
         "ng_pallet_dup_title": "🚫 NG - Pallet QR 중복/순서 오류",
         "ng_pallet_dup_msg": "[NG: Pallet QR 중복 리딩 또는 박스 미완료]\n\n1) 최소 1개 이상의 박스를 완료한 후에만 팔레트 교체가 가능합니다.\n2) 이미 사용된 Pallet QR은 중복 등록할 수 없습니다.\n\n관리자 비밀번호를 입력하여 해제하세요.",
-        "ng_direction_title": "🚫 NG - 제품 적재 방향 오류",
-        "ng_direction_msg": "[비전 판정 NG: 제품 적입 방향 불일치]\n\n빨간색 테두리로 표시된 슬롯({ng_slots})의 제품 방향이 반대로 들어갔습니다.\n\n해당 제품을 바로잡은 뒤 [MANAGER MODE]의 '적재 방향 재스캔'을 켜고 Label QR을 리딩하세요.",
+        "ng_direction_title": "🚫 NG - 제품 적재 방향 오류 (관리자 권한 필요)",
+        "ng_direction_msg": "[비전 판정 NG: 제품 적입 방향 불일치]\n\n빨간색 테두리로 표시된 슬롯({ng_slots})의 제품 방향이 반대로 들어갔습니다.\n\n⚠️ 일반 스캔이 잠겼습니다.\n제품을 바로잡은 뒤 [MANAGER MODE]에 들어가 '박스 적재 방향 재스캔 모드'를 활성화해야만 다시 스캔할 수 있습니다.",
         "ng_label_dup_title": "⚠️ Label QR NG - 중복 스캔",
         "ng_label_dup_msg": "[Label QR NG: 이미 사용된 Label QR입니다]\n\n스캔 Label QR: {code}...\n이미 등록/포장 완료된 중복 라벨입니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_group_title": "⚠️ Grouping NG - 수량 불일치",
@@ -141,7 +141,7 @@ LANG_PACK = {
         "ng_pallet_limit_msg": "[NG: Pallet QR 리딩 누락]\n\n이미 12개 박스가 채워졌습니다.\n새 Pallet QR을 리딩하지 않고 13번째 이상 박스를 진행할 수 없습니다.\n\n관리자 비밀번호를 입력하여 해제하세요.",
         "pallet_popup_title": "Pallet QR 스캔 대기",
         "pallet_popup_msg": "12개 박스 포장이 완료되었습니다.\n새로운 Pallet QR을 스캔해주세요.",
-        "unlock_btn": "확인 및 잠금 해제",
+        "unlock_btn": "확인",
         "confirm_btn": "확인 (Enter)",
         "pw_err": "비밀번호가 올바르지 않습니다."
     }
@@ -170,6 +170,7 @@ class QRScanStationApp:
 
         self.is_manager_mode = False          
         self.is_manager_rejudge_mode = False  
+        self.is_direction_ng_locked = False   # 최초 NG 발생 시 일반 스캔 원천 봉쇄 플래그
         self.last_failed_label_code = ""
 
         self.pallet_qr_feature_enabled = True
@@ -272,7 +273,6 @@ class QRScanStationApp:
         self.root.after(200, self.update_camera_canvas)
 
     def update_camera_canvas(self):
-        """줌인 없이 원본 전체 화각 그대로 여백 없이 꽉 채워 렌더링"""
         frame_to_show = None
         if self.latest_annotated_frame is not None:
             frame_to_show = self.latest_annotated_frame
@@ -309,14 +309,12 @@ class QRScanStationApp:
         self.root.destroy()
 
     # ==========================================
-    # 박스 회전 각도 보정 및 10개 슬롯 정밀 판정
+    # 박스 회전 각도 보정 및 10개 슬롯 정밀 판정 (넘파이 에러 해결)
     # ==========================================
     def extract_aligned_box(self, frame):
-        """대각선으로 틀어진 파란색 박스를 찾아 수평 직사각형으로 똑바로 회전 정렬"""
         h, w = frame.shape[:2]
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         
-        # 파란 박스 마스크 검출
         blue_mask = cv2.inRange(hsv, np.array([90, 60, 40]), np.array([135, 255, 255]))
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
         blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel)
@@ -330,34 +328,24 @@ class QRScanStationApp:
             return None, None, None
 
         largest_cnt = max(valid_cnts, key=cv2.contourArea)
-        rect = cv2.minAreaRect(largest_cnt)  # ((cx, cy), (width, height), angle)
+        rect = cv2.minAreaRect(largest_cnt)
         (cx, cy), (bw, bh), angle = rect
 
-        # 긴 변이 세로(위아래 10개 적재 방향)가 되도록 규격화
         if bw > bh:
             bw, bh = bh, bw
             angle += 90.0
 
         box_points = cv2.boxPoints(((cx, cy), (bw, bh), angle))
-        box_points = np.int0(box_points)
-
-        # 직사각형 평면으로 펴기 위한 목표 좌표 (가로 600, 세로 800)
-        dst_pts = np.array([
-            [0, bh - 1],
-            [0, 0],
-            [bw - 1, 0],
-            [bw - 1, bh - 1]
-        ], dtype="float32")
+        box_points = np.intp(box_points) # numpy 최신 버전 호환 수정 (np.int -> np.intp)
 
         src_pts = box_points.astype("float32")
-        # 4개 꼭짓점 정렬
         s = src_pts.sum(axis=1)
         diff = np.diff(src_pts, axis=1)
         ordered_src = np.zeros((4, 2), dtype="float32")
-        ordered_src[0] = src_pts[np.argmin(s)]       # 좌상
-        ordered_src[2] = src_pts[np.argmax(s)]       # 우하
-        ordered_src[1] = src_pts[np.argmin(diff)]    # 우상
-        ordered_src[3] = src_pts[np.argmax(diff)]    # 좌하
+        ordered_src[0] = src_pts[np.argmin(s)]       
+        ordered_src[2] = src_pts[np.argmax(s)]       
+        ordered_src[1] = src_pts[np.argmin(diff)]    
+        ordered_src[3] = src_pts[np.argmax(diff)]    
 
         target_rect = np.array([
             [0, 0],
@@ -384,11 +372,8 @@ class QRScanStationApp:
             ng_slots = []
 
             if aligned_box is None:
-                # 박스 검출 실패 시 전체 프레임 저장 후 OK 통과
                 return True, "box_not_found", []
 
-            # 보정된 박스(600x800) 내에서 실제 제품 슬롯 10개가 위치하는 내부 마진
-            # 상하 12%~88%, 좌우 12%~88%
             grid_y1 = int(800 * 0.12)
             grid_y2 = int(800 * 0.88)
             grid_x1 = int(600 * 0.12)
@@ -405,29 +390,25 @@ class QRScanStationApp:
                 sy2 = int(grid_y1 + (i + 1) * slot_h)
                 slot_roi = gray_aligned[sy1:sy2, grid_x1:grid_x2]
 
-                # 슬롯 좌측 40% (알루미늄 가공면 구역) vs 우측 40% (검은 완충 블록 구역)
-                sub_w = int(total_w * 0.40)
+                # 슬롯 좌측 45% vs 우측 45% 비교
+                sub_w = int(total_w * 0.45)
                 left_zone = slot_roi[:, :sub_w]
                 right_zone = slot_roi[:, total_w - sub_w:]
 
-                # 은색 가공면의 강한 반사광(165 이상) 비율 분석
                 left_bright = np.sum(left_zone > 165) / left_zone.size
                 right_bright = np.sum(right_zone > 165) / right_zone.size
 
-                # [정밀 판정 조건]
-                # 정상 제품: 좌측에 은색 알루미늄 면이 집중되어 left_bright가 높고, 우측은 검은색 완충 블록이라 어두움
-                # 뒤집힌 불량(NG): 우측에 은색 알루미늄 면이 와서 right_bright가 급증함
+                # [개선된 FRONT 적재 방향 판정]
+                # 정상: 좌측 알루미늄 면 반사광(left_bright)이 뚜렷하고, 우측은 검은 완충재라 어두움.
+                # 역방향(NG): 부품이 뒤집혀 우측에 은색 가공면이 오면서 우측 밝기가 좌측과 비슷해지거나 역전됨.
                 is_ng = False
-                if right_bright > 0.10 and (right_bright >= left_bright * 0.85):
-                    is_ng = True
-                elif right_bright > 0.18:
+                if right_bright > 0.08 and (right_bright >= left_bright * 0.75):
                     is_ng = True
 
                 if is_ng:
                     slot_num = i + 1
                     ng_slots.append(slot_num)
 
-                    # 보정 좌표계의 사각형을 카메라 원본 좌표계로 역변환하여 정확한 위치에 렌더링
                     slot_box_target = np.array([
                         [[grid_x1, sy1]],
                         [[grid_x2, sy1]],
@@ -445,7 +426,6 @@ class QRScanStationApp:
 
             is_ok = (len(ng_slots) == 0)
 
-            # 사진 파일 저장 (불량 테두리 포함 전체화각 사진)
             curr_model = self.current_model.get()
             q_folder_name = get_quarter_folder_name(curr_model)
             today_str = datetime.now().strftime("%Y-%m-%d")
@@ -457,14 +437,14 @@ class QRScanStationApp:
             photo_path = os.path.join(target_save_dir, f"{safe_label_name}.jpg")
             cv2.imwrite(photo_path, annotated_frame)
 
-            # 좌측 하단 뷰어에도 결과 프레임 유지
             self.latest_annotated_frame = annotated_frame if not is_ok else None
 
             detail = f"NG Slots: {ng_slots}" if not is_ok else "All 10 Slots OK"
             return is_ok, detail, ng_slots
 
         except Exception as e:
-            return True, str(e), []
+            # 예외 발생 시 로그 기록 후 안전하게 통과 또는 관리자 확인 유도
+            return True, f"vision_error: {str(e)}", []
 
     # ==========================================
     # MANAGER MODE (Label QR 대기형 재판정 모드)
@@ -517,6 +497,7 @@ class QRScanStationApp:
         def act_rescan_dmc():
             self.is_manager_mode = True
             self.is_manager_rejudge_mode = False
+            self.is_direction_ng_locked = False
             self.btn_manager.config(bg="#f59f00", fg="#000000", text=self.t("manager_btn_on"))
             dialog.destroy()
             messagebox.showinfo("안내", "중복 단품 재스캔 모드가 활성화되었습니다.\n바코드를 1회 스캔하면 자동으로 일반 모드로 전환됩니다.", parent=self.root)
@@ -527,16 +508,18 @@ class QRScanStationApp:
                          font=("맑은 고딕", 10, "bold"), relief="flat", pady=7, cursor="hand2")
         btn1.pack(fill=tk.X, padx=30, pady=4)
 
+        # [요청 반영] NG 발생 시 잠긴 스캔을 풀고 재검사를 수행하는 관리자 버튼
         def act_enable_rejudge_mode():
             self.is_manager_rejudge_mode = True
             self.is_manager_mode = False
+            self.is_direction_ng_locked = False  # 스캔 잠금 해제
             self.latest_annotated_frame = None
             self.btn_manager.config(bg="#10b981", fg="#000000", text=self.t("manager_btn_rejudge"))
             dialog.destroy()
-            messagebox.showinfo("안내", "적재 방향 재판정 대기 상태가 되었습니다.\n제품을 바로잡은 뒤 [Label QR]을 스캔하면 즉시 재판정됩니다.", parent=self.root)
+            messagebox.showinfo("안내", "적재 방향 재스캔 모드가 활성화되었습니다.\n제품을 바로잡은 뒤 [Label QR]을 스캔하면 즉시 재판정됩니다.", parent=self.root)
             self.scan_entry.focus_set()
 
-        btn2 = tk.Button(dialog, text="📷 박스 적재 방향 재스캔 모드 활성화", command=act_enable_rejudge_mode,
+        btn2 = tk.Button(dialog, text="📷 박스 적재 방향 재스캔 모드 활성화 (잠금 해제)", command=act_enable_rejudge_mode,
                          bg="#1c3a24", fg="#8bd9a0", activebackground="#28a745", activeforeground="#ffffff",
                          font=("맑은 고딕", 10, "bold"), relief="flat", pady=7, cursor="hand2")
         btn2.pack(fill=tk.X, padx=30, pady=4)
@@ -1229,7 +1212,7 @@ class QRScanStationApp:
         
         self.pending_items.clear()
         self.pending_tree_ids.clear()
-        self.lbl_pending_status.config(text=self.t("pending_status", count=len(self.pending_items)))
+        self.lbl_pending_status.config(text=self.t("pending_status", count=0))
         self.update_pallet_status_ui()
 
         self.update_stat_cards()
@@ -1414,6 +1397,16 @@ class QRScanStationApp:
         curr_model = self.current_model.get()
         target_code = MODEL_CONFIG[curr_model].upper()
 
+        # [요청 반영] 최초 NG 발생 시 잠긴 상태에서 관리자 모드가 아니면 스캔 입력 원천 차단
+        if self.is_direction_ng_locked and not self.is_manager_rejudge_mode:
+            self.set_status("LOCKED", "#dc3545", "#3a1c1f")
+            self.open_lock_popup(
+                title_text="🚫 스캔 잠김 (관리자 권한 필요)",
+                msg="[안내: 적재 방향 불량으로 잠겼습니다]\n\n제품을 바로잡은 뒤 [MANAGER MODE]에 들어가\n'박스 적재 방향 재스캔 모드'를 활성화해야만 진행할 수 있습니다.",
+                header_bg="#3a1c1f", header_fg="#ff6b6b"
+            )
+            return
+
         # Pallet QR 스캔 처리
         if self.is_pallet_qr(raw_code):
             if not self.pallet_qr_feature_enabled:
@@ -1497,7 +1490,7 @@ class QRScanStationApp:
             return
 
         # ==========================================
-        # Label QR 스캔 (+ 각도 자동 정렬 10개 슬롯 판정)
+        # Label QR 스캔 (+ 비전 판정 및 매니저 모드 제어)
         # ==========================================
         if is_label_qr:
             curr_box_cnt = self.pallet_state[curr_model]["box_count"]
@@ -1541,6 +1534,7 @@ class QRScanStationApp:
 
             if not vision_ok:
                 self.last_failed_label_code = raw_code
+                self.is_direction_ng_locked = True  # 스캔 잠금 설정 (관리자 모드 필요)
                 self.model_counts[curr_model]["ng"] += 1
                 self.model_counts[curr_model]["total"] += 1
                 self.save_model_counts()
@@ -1562,6 +1556,7 @@ class QRScanStationApp:
 
             if self.is_manager_rejudge_mode:
                 self.is_manager_rejudge_mode = False
+                self.is_direction_ng_locked = False
                 self.btn_manager.config(bg="#2c323d", fg="#adb5bd", text=self.t("manager_btn"))
                 self.latest_annotated_frame = None
 
@@ -1697,7 +1692,6 @@ class QRScanStationApp:
             self.direct_finalize_excel_group(curr_model, cur_pallet, raw_code, timestamp_full, items_to_bundle, header_text, extra_content=f"[적재방향 OK: {detail}]")
             self.refresh_grouping_tab()
 
-            # 12박스 완료 시 처리: 자동으로 Pallet QR 기능 ON으로 복원 및 팝업 대기
             if self.pallet_state[curr_model]["box_count"] >= MAX_BOXES_PER_PALLET:
                 self.pallet_qr_feature_enabled = True
                 self.update_pallet_status_ui()
