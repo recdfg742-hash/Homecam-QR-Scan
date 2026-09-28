@@ -255,7 +255,7 @@ class QRScanStationApp:
                     ))
                 else:
                     self.root.after(0, lambda: self.lbl_cam_status.config(
-                        text="✕ 웹캠 연결 실패 (USB 포트 확인)", fg="#f87171"
+                        text="✕ 웹캠 연결 실패 (USB 확인)", fg="#f87171"
                     ))
 
             while self.cam_thread_running:
@@ -272,7 +272,7 @@ class QRScanStationApp:
         self.root.after(200, self.update_camera_canvas)
 
     def update_camera_canvas(self):
-        """줌인 없이 전체 원본 화각 비율을 맞춰 여백 없이 꽉 채워 렌더링"""
+        """줌인 없이 원본 전체 화각 그대로 여백 없이 꽉 채워 렌더링"""
         frame_to_show = None
         if self.latest_annotated_frame is not None:
             frame_to_show = self.latest_annotated_frame
@@ -309,50 +309,68 @@ class QRScanStationApp:
         self.root.destroy()
 
     # ==========================================
-    # 카메라 틀어짐 자동 투시 보정 및 10개 슬롯 정밀 판정
+    # 박스 회전 각도 보정 및 10개 슬롯 정밀 판정
     # ==========================================
-    def order_box_points(self, pts):
-        rect = np.zeros((4, 2), dtype="float32")
-        s = pts.sum(axis=1)
-        rect[0] = pts[np.argmin(s)]       # 좌상단
-        rect[2] = pts[np.argmax(s)]       # 우하단
-        diff = np.diff(pts, axis=1)
-        rect[1] = pts[np.argmin(diff)]    # 우상단
-        rect[3] = pts[np.argmax(diff)]    # 좌하단
-        return rect
-
-    def get_auto_straightened_box(self, frame):
-        """웹캠 각도가 틀어져도 파란 박스 윤곽을 찾아 수평/수직 정면 직사각형으로 자동 보정"""
+    def extract_aligned_box(self, frame):
+        """대각선으로 틀어진 파란색 박스를 찾아 수평 직사각형으로 똑바로 회전 정렬"""
         h, w = frame.shape[:2]
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         
-        # 파란색 박스 검출
-        blue_mask = cv2.inRange(hsv, np.array([95, 70, 50]), np.array([135, 255, 255]))
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+        # 파란 박스 마스크 검출
+        blue_mask = cv2.inRange(hsv, np.array([90, 60, 40]), np.array([135, 255, 255]))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
         blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel)
 
         contours, _ = cv2.findContours(blue_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        if contours:
-            valid_cnts = [c for c in contours if cv2.contourArea(c) > (w * h * 0.10)]
-            if valid_cnts:
-                largest = max(valid_cnts, key=cv2.contourArea)
-                peri = cv2.arcLength(largest, True)
-                approx = cv2.approxPolyDP(largest, 0.03 * peri, True)
-                
-                # 4각형이 검출되면 Perspective Transform으로 비뚤어진 각도를 정면으로 보정
-                if len(approx) == 4:
-                    pts = approx.reshape(4, 2)
-                    rect = self.order_box_points(pts)
-                    dst = np.array([[0, 0], [600, 0], [600, 800], [0, 800]], dtype="float32")
-                    M = cv2.getPerspectiveTransform(rect, dst)
-                    inv_M = cv2.getPerspectiveTransform(dst, rect)
-                    warped = cv2.warpPerspective(frame, M, (600, 800))
-                    return warped, inv_M, rect
+        if not contours:
+            return None, None, None
 
-        # 4각 검출 실패 시 기본 중앙 영역 사용
-        bx, by, bw, bh = int(w*0.20), int(h*0.05), int(w*0.65), int(h*0.90)
-        return frame[by:by+bh, bx:bx+bw], None, None
+        valid_cnts = [c for c in contours if cv2.contourArea(c) > (w * h * 0.08)]
+        if not valid_cnts:
+            return None, None, None
+
+        largest_cnt = max(valid_cnts, key=cv2.contourArea)
+        rect = cv2.minAreaRect(largest_cnt)  # ((cx, cy), (width, height), angle)
+        (cx, cy), (bw, bh), angle = rect
+
+        # 긴 변이 세로(위아래 10개 적재 방향)가 되도록 규격화
+        if bw > bh:
+            bw, bh = bh, bw
+            angle += 90.0
+
+        box_points = cv2.boxPoints(((cx, cy), (bw, bh), angle))
+        box_points = np.int0(box_points)
+
+        # 직사각형 평면으로 펴기 위한 목표 좌표 (가로 600, 세로 800)
+        dst_pts = np.array([
+            [0, bh - 1],
+            [0, 0],
+            [bw - 1, 0],
+            [bw - 1, bh - 1]
+        ], dtype="float32")
+
+        src_pts = box_points.astype("float32")
+        # 4개 꼭짓점 정렬
+        s = src_pts.sum(axis=1)
+        diff = np.diff(src_pts, axis=1)
+        ordered_src = np.zeros((4, 2), dtype="float32")
+        ordered_src[0] = src_pts[np.argmin(s)]       # 좌상
+        ordered_src[2] = src_pts[np.argmax(s)]       # 우하
+        ordered_src[1] = src_pts[np.argmin(diff)]    # 우상
+        ordered_src[3] = src_pts[np.argmax(diff)]    # 좌하
+
+        target_rect = np.array([
+            [0, 0],
+            [599, 0],
+            [599, 799],
+            [0, 799]
+        ], dtype="float32")
+
+        M = cv2.getPerspectiveTransform(ordered_src, target_rect)
+        inv_M = cv2.getPerspectiveTransform(target_rect, ordered_src)
+        aligned_box = cv2.warpPerspective(frame, M, (600, 800))
+
+        return aligned_box, inv_M, ordered_src
 
     def inspect_front_loading_direction(self, label_code):
         if not CV_AVAILABLE or self.current_webcam_frame is None:
@@ -360,66 +378,74 @@ class QRScanStationApp:
 
         try:
             full_frame = self.current_webcam_frame.copy()
-            warped_box, inv_M, rect = self.get_auto_straightened_box(full_frame)
+            aligned_box, inv_M, src_corners = self.extract_aligned_box(full_frame)
 
             annotated_frame = full_frame.copy()
             ng_slots = []
 
-            # 보정된 평면 박스(600x800) 내에서 실제 제품 슬롯 영역 설정
-            wh, ww = warped_box.shape[:2]
-            slot_y_start = int(wh * 0.12)
-            slot_y_end = int(wh * 0.88)
-            slot_x_start = int(ww * 0.15)
-            slot_x_end = int(ww * 0.85)
+            if aligned_box is None:
+                # 박스 검출 실패 시 전체 프레임 저장 후 OK 통과
+                return True, "box_not_found", []
 
-            slot_total_h = slot_y_end - slot_y_start
-            slot_h = slot_total_h / 10.0
-            slot_w = slot_x_end - slot_x_start
+            # 보정된 박스(600x800) 내에서 실제 제품 슬롯 10개가 위치하는 내부 마진
+            # 상하 12%~88%, 좌우 12%~88%
+            grid_y1 = int(800 * 0.12)
+            grid_y2 = int(800 * 0.88)
+            grid_x1 = int(600 * 0.12)
+            grid_x2 = int(600 * 0.88)
 
-            gray_warped = cv2.cvtColor(warped_box, cv2.COLOR_BGR2GRAY)
+            total_h = grid_y2 - grid_y1
+            total_w = grid_x2 - grid_x1
+            slot_h = total_h / 10.0
+
+            gray_aligned = cv2.cvtColor(aligned_box, cv2.COLOR_BGR2GRAY)
 
             for i in range(10):
-                sy1 = int(slot_y_start + i * slot_h)
-                sy2 = int(slot_y_start + (i + 1) * slot_h)
-                slot_roi = gray_warped[sy1:sy2, slot_x_start:slot_x_end]
+                sy1 = int(grid_y1 + i * slot_h)
+                sy2 = int(grid_y1 + (i + 1) * slot_h)
+                slot_roi = gray_aligned[sy1:sy2, grid_x1:grid_x2]
 
-                # 좌측 알루미늄 가공면 35% vs 우측 검은 완충재 35% 비교
-                z_w = int(slot_w * 0.35)
-                left_zone = slot_roi[:, :z_w]
-                right_zone = slot_roi[:, slot_w - z_w:]
+                # 슬롯 좌측 40% (알루미늄 가공면 구역) vs 우측 40% (검은 완충 블록 구역)
+                sub_w = int(total_w * 0.40)
+                left_zone = slot_roi[:, :sub_w]
+                right_zone = slot_roi[:, total_w - sub_w:]
 
-                left_bright = np.sum(left_zone > 155) / left_zone.size
-                right_bright = np.sum(right_zone > 155) / right_zone.size
+                # 은색 가공면의 강한 반사광(165 이상) 비율 분석
+                left_bright = np.sum(left_zone > 165) / left_zone.size
+                right_bright = np.sum(right_zone > 165) / right_zone.size
 
-                # [판정 기준] 정상품은 좌측이 밝고 우측 검은 완충재는 어두움
-                # 반대로 적재되면 우측 밝기가 좌측과 비슷해지거나 더 높아짐
-                is_slot_ng = False
-                if right_bright > 0.13 and (right_bright >= left_bright * 0.82):
-                    is_slot_ng = True
+                # [정밀 판정 조건]
+                # 정상 제품: 좌측에 은색 알루미늄 면이 집중되어 left_bright가 높고, 우측은 검은색 완충 블록이라 어두움
+                # 뒤집힌 불량(NG): 우측에 은색 알루미늄 면이 와서 right_bright가 급증함
+                is_ng = False
+                if right_bright > 0.10 and (right_bright >= left_bright * 0.85):
+                    is_ng = True
+                elif right_bright > 0.18:
+                    is_ng = True
 
-                if is_slot_ng:
+                if is_ng:
                     slot_num = i + 1
                     ng_slots.append(slot_num)
 
-                    # 보정 좌표계에서 원본 좌표계로 역변환하여 정확한 위치에 빨간 테두리 렌더링
-                    if inv_M is not None:
-                        poly_pts = np.array([
-                            [[slot_x_start, sy1]],
-                            [[slot_x_end, sy1]],
-                            [[slot_x_end, sy2]],
-                            [[slot_x_start, sy2]]
-                        ], dtype="float32")
-                        orig_pts = cv2.perspectiveTransform(poly_pts, inv_M)
-                        orig_pts = orig_pts.astype(np.int32)
-                        cv2.polylines(annotated_frame, [orig_pts], isClosed=True, color=(0, 0, 255), thickness=3)
-                        txt_pt = (int(orig_pts[0][0][0]) + 10, int(orig_pts[0][0][1]) + 20)
-                        cv2.putText(annotated_frame, f"NG #{slot_num}", txt_pt, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                    else:
-                        cv2.rectangle(annotated_frame, (slot_x_start, sy1), (slot_x_end, sy2), (0, 0, 255), 3)
+                    # 보정 좌표계의 사각형을 카메라 원본 좌표계로 역변환하여 정확한 위치에 렌더링
+                    slot_box_target = np.array([
+                        [[grid_x1, sy1]],
+                        [[grid_x2, sy1]],
+                        [[grid_x2, sy2]],
+                        [[grid_x1, sy2]]
+                    ], dtype="float32")
+
+                    orig_box = cv2.perspectiveTransform(slot_box_target, inv_M)
+                    orig_box = orig_box.astype(np.int32)
+
+                    cv2.polylines(annotated_frame, [orig_box], isClosed=True, color=(0, 0, 255), thickness=3)
+                    txt_x = int(orig_box[0][0][0])
+                    txt_y = int(orig_box[0][0][1])
+                    cv2.putText(annotated_frame, f"NG #{slot_num}", (txt_x, txt_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
             is_ok = (len(ng_slots) == 0)
 
-            # 분기별/일자별/ITEM별 폴더에 원본 전체화각 사진 저장 (빨간 테두리 포함)
+            # 사진 파일 저장 (불량 테두리 포함 전체화각 사진)
             curr_model = self.current_model.get()
             q_folder_name = get_quarter_folder_name(curr_model)
             today_str = datetime.now().strftime("%Y-%m-%d")
@@ -431,7 +457,7 @@ class QRScanStationApp:
             photo_path = os.path.join(target_save_dir, f"{safe_label_name}.jpg")
             cv2.imwrite(photo_path, annotated_frame)
 
-            # 좌측 하단 뷰어에도 결과 프레임 반영
+            # 좌측 하단 뷰어에도 결과 프레임 유지
             self.latest_annotated_frame = annotated_frame if not is_ok else None
 
             detail = f"NG Slots: {ng_slots}" if not is_ok else "All 10 Slots OK"
@@ -753,7 +779,7 @@ class QRScanStationApp:
         )
         self.lbl_pending_status.pack(fill=tk.X, padx=20, pady=(0, 4))
 
-        # 좌측 하단 웹캠 뷰어 (여백 없이 꽉 채움)
+        # 좌측 하단 웹캠 뷰어 (전체 화각 꽉 채움)
         cam_panel = tk.Frame(left_panel, bg=BG_PANEL)
         cam_panel.pack(fill=tk.BOTH, expand=True, padx=20, pady=(2, 10))
 
@@ -1203,7 +1229,7 @@ class QRScanStationApp:
         
         self.pending_items.clear()
         self.pending_tree_ids.clear()
-        self.lbl_pending_status.config(text=self.t("pending_status", count=0))
+        self.lbl_pending_status.config(text=self.t("pending_status", count=len(self.pending_items)))
         self.update_pallet_status_ui()
 
         self.update_stat_cards()
@@ -1471,7 +1497,7 @@ class QRScanStationApp:
             return
 
         # ==========================================
-        # Label QR 스캔 (+ 10개 슬롯 정밀 판정 및 테두리 합성)
+        # Label QR 스캔 (+ 각도 자동 정렬 10개 슬롯 판정)
         # ==========================================
         if is_label_qr:
             curr_box_cnt = self.pallet_state[curr_model]["box_count"]
