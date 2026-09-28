@@ -80,7 +80,6 @@ def get_quarter_filename(model_name, dt=None):
     return f"{q_folder}.xlsx"
 
 def sanitize_filename(name):
-    # 파일명으로 사용할 수 없는 특수문자 치환
     return re.sub(r'[\/:*?"<>|;]', '_', name).strip()
 
 LANG_PACK = {
@@ -124,7 +123,7 @@ LANG_PACK = {
         "ng_pallet_dup_title": "🚫 NG - Pallet QR 중복/순서 오류",
         "ng_pallet_dup_msg": "[NG: Pallet QR 중복 리딩 또는 박스 미완료]\n\n1) 최소 1개 이상의 박스를 완료한 후에만 팔레트 교체가 가능합니다.\n2) 이미 사용된 Pallet QR은 중복 등록할 수 없습니다.\n\n관리자 비밀번호를 입력하여 해제하세요.",
         "ng_direction_title": "🚫 NG - 제품 적재 방향 오류",
-        "ng_direction_msg": "[비전 판정 NG: 제품 적입 방향 불일치]\n\n박스의 화살표 방향(아래 방향) 및 제품 10개의 적재 방향이 올바르지 않습니다.\n\n제품을 올바른 방향으로 고친 뒤 [MANAGER MODE]의 '적재 방향 재판정'을 누르세요.",
+        "ng_direction_msg": "[비전 판정 NG: 제품 적입 방향 불일치]\n\n1) 파란 박스의 화살표 방향(아래 방향 ↓) 또는\n2) 제품 10개의 은색 가공면 노출 방향이 올바르지 않습니다.\n\n박스를 바로잡은 뒤 [MANAGER MODE]의 '적재 방향 재판정'을 누르세요.",
         "ng_label_dup_title": "⚠️ Label QR NG - 중복 스캔",
         "ng_label_dup_msg": "[Label QR NG: 이미 사용된 Label QR입니다]\n\n스캔 Label QR: {code}...\n이미 등록/포장 완료된 중복 라벨입니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_group_title": "⚠️ Grouping NG - 수량 불일치",
@@ -171,9 +170,10 @@ class QRScanStationApp:
         self.is_manager_mode = False
         self.last_failed_label_code = ""
 
-        # 웹캠 관련 제어 변수
+        # 웹캠 관련 변수
         self.cap = None
         self.current_webcam_frame = None
+        self.latest_cropped_box = None
         self.is_camera_ready = False
         self.cam_thread_running = True
         self.cam_photo = None
@@ -203,7 +203,6 @@ class QRScanStationApp:
         self.setup_global_key_listener()
         self.on_model_changed()
 
-        # USB 웹캠 직결 스트림 구동
         self.start_usb_webcam_stream()
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
@@ -223,7 +222,7 @@ class QRScanStationApp:
         threading.Thread(target=_beep, daemon=True).start()
 
     # ==========================================
-    # USB 웹캠 직접 연결 스트림
+    # USB 웹캠 연결 및 30FPS 실시간 자동 줌인 뷰어
     # ==========================================
     def start_usb_webcam_stream(self):
         def _webcam_worker():
@@ -236,7 +235,7 @@ class QRScanStationApp:
                     self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
                     self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
                     self.is_camera_ready = True
-                    self.root.after(0, lambda: self.lbl_cam_status.config(text="● LIVE (웹캠 연결됨)", fg="#22c55e"))
+                    self.root.after(0, lambda: self.lbl_cam_status.config(text="● LIVE (박스 자동 줌인)", fg="#22c55e"))
                 else:
                     self.root.after(0, lambda: self.lbl_cam_status.config(text="✕ 웹캠 연결 실패", fg="#f87171"))
 
@@ -253,24 +252,54 @@ class QRScanStationApp:
         threading.Thread(target=_webcam_worker, daemon=True).start()
         self.root.after(200, self.update_camera_canvas)
 
+    def crop_blue_box_region(self, frame):
+        """파란색 박스의 위치를 스스로 찾아내어 주변부를 제거하고 박스만 줌인 추출"""
+        try:
+            h, w = frame.shape[:2]
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            
+            # 파란색 박스 마스크 (HSV 범위)
+            blue_mask = cv2.inRange(hsv, np.array([95, 80, 60]), np.array([130, 255, 255]))
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+            blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel)
+
+            contours, _ = cv2.findContours(blue_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                # 면적이 일정 이상 큰 파란색 컨투어 중 가장 큰 박스를 선택
+                valid_cnts = [c for c in contours if cv2.contourArea(c) > (w * h * 0.08)]
+                if valid_cnts:
+                    largest_cnt = max(valid_cnts, key=cv2.contourArea)
+                    bx, by, bw, bh = cv2.boundingRect(largest_cnt)
+                    # 여백 5% 포함 크롭
+                    px = max(0, bx - int(bw * 0.02))
+                    py = max(0, by - int(bh * 0.02))
+                    pw = min(w - px, bw + int(bw * 0.04))
+                    ph = min(h - py, bh + int(bh * 0.04))
+                    if pw > 100 and ph > 100:
+                        return frame[py:py+ph, px:px+pw]
+        except Exception:
+            pass
+
+        # 박스 추적 실패 시 중앙 기본 영역 줌인
+        return frame[int(h*0.1):int(h*0.9), int(w*0.2):int(w*0.85)]
+
     def update_camera_canvas(self):
+        """프로그램 좌측 하단에 주변을 자르고 줌인된 박스 내부만 깔끔하게 렌더링"""
         if self.current_webcam_frame is not None:
             frame = self.current_webcam_frame.copy()
-            h, w = frame.shape[:2]
+            cropped = self.crop_blue_box_region(frame)
+            self.latest_cropped_box = cropped
 
             target_w, target_h = 390, 230
-            scale = min(target_w / w, target_h / h)
-            disp_w = max(1, int(w * scale))
-            disp_h = max(1, int(h * scale))
+            ch, cw = cropped.shape[:2]
+            scale = min(target_w / cw, target_h / ch)
+            disp_w = max(1, int(cw * scale))
+            disp_h = max(1, int(ch * scale))
 
-            resized = cv2.resize(frame, (disp_w, disp_h))
+            resized = cv2.resize(cropped, (disp_w, disp_h))
 
-            # 검사 ROI 가이드 박스 표시
-            rx1 = int(disp_w * 0.20)
-            ry1 = int(disp_h * 0.15)
-            rx2 = int(disp_w * 0.85)
-            ry2 = int(disp_h * 0.85)
-            cv2.rectangle(resized, (rx1, ry1), (rx2, ry2), (0, 255, 255), 2)
+            # 중앙 안내용 가상 가이드 십자선 (초록색 점선 느낌)
+            cv2.line(resized, (disp_w//2, 0), (disp_w//2, disp_h), (0, 255, 120), 1)
 
             rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
             pil_img = Image.fromarray(rgb)
@@ -290,17 +319,17 @@ class QRScanStationApp:
         self.root.destroy()
 
     # ==========================================
-    # FRONT 비전 적재 방향 검사 및 사진 자동 분기 저장
+    # FRONT 비전 적재 방향 판정 및 줌인 사진 분기별/일자별 저장
     # ==========================================
     def inspect_front_loading_direction(self, label_code):
         if not CV_AVAILABLE or self.current_webcam_frame is None:
             return True, "webcam_frame_missing"
 
         try:
-            frame = self.current_webcam_frame.copy()
-            h, w = frame.shape[:2]
+            full_frame = self.current_webcam_frame.copy()
+            cropped_box = self.latest_cropped_box if self.latest_cropped_box is not None else self.crop_blue_box_region(full_frame)
 
-            # 1. 분기별/일자별/ITEM별 폴더 경로 생성
+            # 1. 줌인된 깔끔한 박스 이미지를 분기별/일자별/ITEM별로 저장
             curr_model = self.current_model.get()
             q_folder_name = get_quarter_folder_name(curr_model)
             today_str = datetime.now().strftime("%Y-%m-%d")
@@ -309,43 +338,47 @@ class QRScanStationApp:
             os.makedirs(target_save_dir, exist_ok=True)
 
             safe_label_name = sanitize_filename(label_code)
-            photo_file_name = f"{safe_label_name}.jpg"
-            full_photo_path = os.path.join(target_save_dir, photo_file_name)
+            photo_path = os.path.join(target_save_dir, f"{safe_label_name}.jpg")
+            
+            # 깨끗하게 줌인된 박스 사진 저장
+            cv2.imwrite(photo_path, cropped_box)
 
-            # 원본 고해상도 사진 영구 저장
-            cv2.imwrite(full_photo_path, frame)
+            # 2. 정밀 판정 로직:
+            # OK 기준 (사진 1번):
+            #  - 박스 우측 테두리의 화살표가 아래쪽(↓)을 향함
+            #  - 제품 10개의 은색 가공면이 좌측에 배치되고 우측은 검은 완충재로 정렬됨
+            bh, bw = cropped_box.shape[:2]
 
-            # 2. 박스 및 부품 영역 ROI 설정
-            box_roi = frame[int(h * 0.15):int(h * 0.85), int(w * 0.20):int(w * 0.85)]
-            h_roi, w_roi = box_roi.shape[:2]
+            # 2-1. 좌/우 밝기 대조 분석 (은색 가공면 vs 검은 리브)
+            gray_box = cv2.cvtColor(cropped_box, cv2.COLOR_BGR2GRAY)
+            inner_content = gray_box[int(bh * 0.15):int(bh * 0.85), int(bw * 0.15):int(bw * 0.80)]
+            ih, iw = inner_content.shape[:2]
 
-            # 3. 파란색 박스 화살표 영역 검출 (박스 우측 상/하단 청색 채널 분석)
-            hsv = cv2.cvtColor(box_roi, cv2.COLOR_BGR2HSV)
-            blue_lower = np.array([100, 70, 70])
-            blue_upper = np.array([135, 255, 255])
-            blue_mask = cv2.inRange(hsv, blue_lower, blue_upper)
+            left_half = inner_content[:, :iw//2]
+            right_half = inner_content[:, iw//2:]
 
-            # 화살표 영역 (우측 테두리 상단 vs 하단 밀도 확인)
-            right_strip = blue_mask[:, int(w_roi * 0.75):]
-            top_blue = np.sum(right_strip[:int(h_roi * 0.5), :] > 0)
-            bottom_blue = np.sum(right_strip[int(h_roi * 0.5):, :] > 0)
+            # 좌측 알루미늄 가공면의 밝은 픽셀(160 이상) 비율
+            left_bright_ratio = np.sum(left_half > 160) / left_half.size
+            # 우측 검은 완충 블록의 밝은 픽셀 비율
+            right_bright_ratio = np.sum(right_half > 160) / right_half.size
 
-            # 4. 제품 적재 방향 분석 (은색 알루미늄 면 노출 비율)
-            gray_roi = cv2.cvtColor(box_roi, cv2.COLOR_BGR2GRAY)
-            bright_pixels = np.sum(gray_roi > 175)
-            total_pixels = gray_roi.size
-            bright_ratio = bright_pixels / total_pixels
+            # 2-2. 파란 박스 테두리 화살표 분석 (박스 우측 측면 상단 vs 하단 밀도)
+            hsv = cv2.cvtColor(cropped_box, cv2.COLOR_BGR2HSV)
+            blue_mask = cv2.inRange(hsv, np.array([95, 80, 60]), np.array([130, 255, 255]))
+            right_edge = blue_mask[:, int(bw * 0.80):]
+            arrow_top = np.sum(right_edge[:bh//2, :] > 0)
+            arrow_bottom = np.sum(right_edge[bh//2:, :] > 0)
 
-            # [OK 판정 조건]:
-            # 1) 박스 화살표가 OK 사진처럼 아래 방향 (하단 청색 대비 비율 정상)
-            # 2) 은색 가공면이 2번 사진(NG)처럼 과도하게 위로 드러나지 않음 (bright_ratio <= 0.12)
-            arrow_ok = (bottom_blue >= top_blue * 0.6)  # 화살표 아래 지향
-            part_dir_ok = (bright_ratio <= 0.12)        # 검은 완충 리브 정상 상단 노출
+            # OK 조건: 
+            # 1) 좌측에 은색 가공면이 몰려있고(left > right) 우측은 어두운 검은색이어야 함
+            # 2) 우측 테두리의 화살표 양각이 OK 사진처럼 아래쪽을 지향해야 함
+            part_dir_ok = (left_bright_ratio > (right_bright_ratio + 0.04))
+            arrow_ok = (arrow_bottom >= arrow_top * 0.7)
 
-            is_overall_ok = arrow_ok and part_dir_ok
-            detail = f"arrow={'OK' if arrow_ok else 'NG'}, bright_ratio={bright_ratio:.3f}"
+            is_ok = part_dir_ok and arrow_ok
+            detail = f"L_bright={left_bright_ratio:.2f}, R_bright={right_bright_ratio:.2f}, arrow={'OK' if arrow_ok else 'NG'}"
 
-            return is_overall_ok, detail
+            return is_ok, detail
 
         except Exception as e:
             return True, str(e)
@@ -420,6 +453,7 @@ class QRScanStationApp:
         btn2.pack(fill=tk.X, padx=30, pady=5)
 
     def rejudge_loading_direction_now(self):
+        """작업자가 박스/제품 방향을 바르게 고쳐 넣은 뒤 즉시 재판정"""
         curr_model = self.current_model.get()
         label_code = self.last_failed_label_code if self.last_failed_label_code else (self.pending_items[-1]["code"] if self.pending_items else "REJUDGE")
         
@@ -700,13 +734,13 @@ class QRScanStationApp:
         )
         self.lbl_pending_status.pack(fill=tk.X, padx=20, pady=(0, 4))
 
-        # 좌측 하단 웹캠 실시간 뷰어 프레임
+        # 좌측 하단 스마트 박스 줌인 뷰어
         cam_panel = tk.Frame(left_panel, bg=BG_PANEL)
         cam_panel.pack(fill=tk.BOTH, expand=True, padx=20, pady=(2, 10))
 
         top_info = tk.Frame(cam_panel, bg=BG_PANEL)
         top_info.pack(fill=tk.X)
-        tk.Label(top_info, text="📷 실시간 웹캠 뷰어 [HP 320 FHD]", font=("맑은 고딕", 9, "bold"), fg="#38bdf8", bg=BG_PANEL).pack(side=tk.LEFT)
+        tk.Label(top_info, text="📷 실시간 웹캠 (박스 자동 줌인)", font=("맑은 고딕", 9, "bold"), fg="#38bdf8", bg=BG_PANEL).pack(side=tk.LEFT)
         self.lbl_cam_status = tk.Label(top_info, text="○ 연결 확인 중...", font=("맑은 고딕", 8, "bold"), fg="#f87171", bg=BG_PANEL)
         self.lbl_cam_status.pack(side=tk.RIGHT)
 
@@ -735,8 +769,8 @@ class QRScanStationApp:
         self.tree.heading("Content", text=self.t("th_content"))
 
         self.tree.column("Pallet", width=170, anchor="w")
-        self.tree.column("DAY", width=80, anchor="center")
-        self.tree.column("TIME", width=70, anchor="center")
+        self.tree.column("DAY", width=85, anchor="center")
+        self.tree.column("TIME", width=75, anchor="center")
         self.tree.column("Label QR", width=220, anchor="w")
         self.tree.column("DMC", width=210, anchor="w")
         self.tree.column("JUDGMENT", width=75, anchor="center")
@@ -822,6 +856,7 @@ class QRScanStationApp:
                         box_time = str(row[2]).strip() if row[2] and str(row[2]).strip() != "-" else ""
                         seq_val = str(row[3]).strip() if row[3] else ""
                         desc_val = str(row[4]).strip() if row[4] else ""
+                        dmc_time = str(row[5]).strip() if row[5] and str(row[5]).strip() != "-" else ""
                         res_val = str(row[6]).strip() if row[6] else "OK"
                     else:
                         p_val = ""
@@ -829,22 +864,20 @@ class QRScanStationApp:
                         box_time = str(row[1]).strip() if row[1] and str(row[1]).strip() != "-" else ""
                         seq_val = str(row[2]).strip() if row[2] else ""
                         desc_val = str(row[3]).strip() if row[3] else ""
+                        dmc_time = str(row[4]).strip() if row[4] and str(row[4]).strip() != "-" else ""
                         res_val = str(row[5]).strip() if row[5] else "OK"
 
                     if seq_val == "Final HEADER" and "Start" in desc_val:
                         current_pallet_code = p_val
                         box_seq_tracker = 0
-                        t_parts = box_time.split()
+                        t_parts = (dmc_time if dmc_time else box_time).split()
                         d_str = t_parts[0] if len(t_parts) > 0 else ""
                         tm_str = t_parts[1] if len(t_parts) > 1 else ""
                         group_rows.append((p_val, "-", d_str, tm_str, "[Pallet Grouping Start]", "-", "START", "pallet_start"))
                         continue
 
                     if seq_val == "Final HEADER" and "Done" in desc_val:
-                        t_parts = box_time.split()
-                        d_str = t_parts[0] if len(t_parts) > 0 else ""
-                        tm_str = t_parts[1] if len(t_parts) > 1 else ""
-                        group_rows.append((p_val, "-", d_str, tm_str, "[Pallet Grouping Done]", f"{box_seq_tracker} 박스", "DONE", "pallet_done"))
+                        group_rows.append((p_val, "-", "", "", "[Pallet Grouping Done]", f"{box_seq_tracker} 박스", "DONE", "pallet_done"))
                         box_seq_tracker = 0
                         continue
 
@@ -933,8 +966,8 @@ class QRScanStationApp:
         self.tree_recode.heading("Content", text=self.t("th_content"))
 
         self.tree_recode.column("Pallet", width=170, anchor="w")
-        self.tree_recode.column("DAY", width=80, anchor="center")
-        self.tree_recode.column("TIME", width=70, anchor="center")
+        self.tree_recode.column("DAY", width=85, anchor="center")
+        self.tree_recode.column("TIME", width=75, anchor="center")
         self.tree_recode.column("Label QR", width=220, anchor="w")
         self.tree_recode.column("DMC", width=210, anchor="w")
         self.tree_recode.column("JUDGMENT", width=75, anchor="center")
@@ -1251,9 +1284,9 @@ class QRScanStationApp:
                         if not ts_str or ts_str == "-":
                             continue
 
-                        t_parts = ts_str.split()
-                        day_val = t_parts[0] if len(t_parts) > 0 else ""
-                        time_val = t_parts[1] if len(t_parts) > 1 else ""
+                        parts = ts_str.split()
+                        day_val = parts[0] if len(parts) > 0 else ""
+                        time_val = parts[1] if len(parts) > 1 else ""
 
                         clean_dmc = dmc_str.replace("[중복스캔] ", "").replace("[중복 스캔] ", "").upper()
                         if not clean_dmc.startswith(target_upper):
@@ -1333,9 +1366,7 @@ class QRScanStationApp:
         curr_model = self.current_model.get()
         target_code = MODEL_CONFIG[curr_model].upper()
 
-        # ==========================================
-        # 1. Pallet QR 스캔 처리 (날짜 및 시간 표시 적용)
-        # ==========================================
+        # Pallet QR 스캔
         if self.is_pallet_qr(raw_code):
             upper_pallet_code = raw_code.upper()
 
@@ -1369,7 +1400,6 @@ class QRScanStationApp:
                 )
                 return
 
-            # 이전 팔레트 완료 처리 (FINISH는 시간 표시 불필요)
             if prev_pallet and curr_box_count >= 1:
                 self.direct_append_pallet_header(curr_model, prev_pallet, "Final HEADER", "[Pallet Grouping Done]", timestamp_full, include_time=False)
                 self.tree.insert("", 0, values=(prev_pallet, "", "", "", "[Pallet Grouping Done]", "OK", ""), tags=("pallet_row",))
@@ -1380,7 +1410,6 @@ class QRScanStationApp:
             self.save_pallet_state()
             self.update_pallet_status_ui()
 
-            # [수정] 신규 Pallet 리딩 시 DAY, TIME 정확히 기록
             self.direct_append_pallet_header(curr_model, upper_pallet_code, "Final HEADER", "[Pallet Grouping Start]", timestamp_full, include_time=True)
             self.tree.insert("", 0, values=(upper_pallet_code, day_str, time_str, "", "[Pallet Grouping Start]", "OK", ""), tags=("pallet_row",))
 
@@ -1416,9 +1445,7 @@ class QRScanStationApp:
             self.open_sorting_popup(raw_code)
             return
 
-        # ==========================================
-        # 2. Label QR 스캔 (+ 비전 방향 판정 및 분기/일자별 사진 저장)
-        # ==========================================
+        # Label QR 스캔 (+ 비전 적재 방향 검사)
         if is_label_qr:
             curr_box_cnt = self.pallet_state[curr_model]["box_count"]
 
@@ -1456,7 +1483,7 @@ class QRScanStationApp:
                 )
                 return
 
-            # 비전 판정 및 사진 자동 저장
+            # 비전 판정 실행
             vision_ok, detail = self.inspect_front_loading_direction(raw_code)
             if not vision_ok:
                 self.last_failed_label_code = raw_code
@@ -1478,9 +1505,7 @@ class QRScanStationApp:
                 )
                 return
 
-        # ==========================================
-        # 3. 단품 QR 스캔 처리
-        # ==========================================
+        # 단품 QR
         if not is_label_qr:
             if len(self.pending_items) >= MAX_ITEMS_PER_BOX:
                 self.set_status("NG", "#dc3545", "#3a1c1f")
@@ -1493,7 +1518,6 @@ class QRScanStationApp:
 
             is_already_scanned = (clean_upper_code in self.scanned_history_by_model[curr_model])
 
-            # MANAGER MODE: 중복 샘플 재스캔 1회 허용
             if self.is_manager_mode:
                 if not is_already_scanned:
                     self.set_status("NG", "#dc3545", "#3a1c1f")
@@ -1695,7 +1719,6 @@ class QRScanStationApp:
                 fill_to_use = start_fill if "Start" in text_val else done_fill
                 ts_record = timestamp_full if include_time else "-"
                 
-                # C열(Label 스캔일시) 및 F열(단품 스캔일시)에 날짜 표기 반영
                 row_data = [pallet_code, "-", ts_record, seq_val, text_val, ts_record, "OK", ""]
                 ws.append(row_data)
                 h_idx = ws.max_row
@@ -1747,7 +1770,7 @@ class QRScanStationApp:
                         if modified:
                             wb.save(f_path)
                     hide_file(f_path)
-            except Exception:
+            except Exception as e:
                 pass
 
     def direct_append_single_item(self, model_name, item):
@@ -1777,7 +1800,7 @@ class QRScanStationApp:
 
                 wb.save(filepath)
                 hide_file(filepath)
-            except Exception:
+            except Exception as e:
                 pass
 
     def direct_finalize_excel_group(self, model_name, pallet_code, box_qr, box_time, items, header_text, extra_content=""):
@@ -1814,7 +1837,7 @@ class QRScanStationApp:
 
                 wb.save(filepath)
                 hide_file(filepath)
-            except Exception:
+            except Exception as e:
                 pass
 
     def direct_record_ng_log(self, model_name, pallet_code, label_code, timestamp_full, extra_content):
@@ -1843,7 +1866,7 @@ class QRScanStationApp:
 
                 wb.save(filepath)
                 hide_file(filepath)
-            except Exception:
+            except Exception as e:
                 pass
 
     def direct_handle_dmc_duplicate(self, model_name, raw_code, day_str, time_str, matched_label, dup_text, pallet_code):
