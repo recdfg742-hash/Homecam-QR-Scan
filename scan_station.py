@@ -170,6 +170,9 @@ class QRScanStationApp:
         self.is_manager_mode = False
         self.last_failed_label_code = ""
 
+        # Pallet QR 기능 활성화 플래그 (기본값 True / 12개 완료 시 강제 True)
+        self.pallet_qr_feature_enabled = True
+
         # 웹캠 관련 제어 변수
         self.cap = None
         self.current_webcam_frame = None
@@ -204,7 +207,6 @@ class QRScanStationApp:
         self.setup_global_key_listener()
         self.on_model_changed()
 
-        # USB 외장 웹캠 우선 검색 및 연결
         self.start_usb_webcam_stream()
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
@@ -224,11 +226,9 @@ class QRScanStationApp:
         threading.Thread(target=_beep, daemon=True).start()
 
     # ==========================================
-    # 외장 USB 웹캠 우선 검색 및 연결 (내장 캠 건너뛰기)
+    # USB 웹캠 연결
     # ==========================================
     def find_and_open_camera(self):
-        """외장 웹캠(1, 2, 3)을 우선 탐색하고 없을 경우에만 0번 탐색"""
-        # 통상 외장 웹캠은 1, 2번에 할당됨
         search_order = [1, 2, 3, 0]
         for idx in search_order:
             cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
@@ -236,7 +236,6 @@ class QRScanStationApp:
                 cap = cv2.VideoCapture(idx)
             
             if cap.isOpened():
-                # 정상적으로 프레임이 읽히는지 확인
                 ret, test_frame = cap.read()
                 if ret and test_frame is not None:
                     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
@@ -275,38 +274,17 @@ class QRScanStationApp:
         threading.Thread(target=_webcam_worker, daemon=True).start()
         self.root.after(200, self.update_camera_canvas)
 
-    def crop_blue_box_region(self, frame):
-        """파란색 박스의 위치를 스스로 찾아내어 주변부를 제거하고 박스만 줌인 추출"""
-        try:
-            h, w = frame.shape[:2]
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            
-            blue_mask = cv2.inRange(hsv, np.array([95, 80, 60]), np.array([130, 255, 255]))
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
-            blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel)
-
-            contours, _ = cv2.findContours(blue_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if contours:
-                valid_cnts = [c for c in contours if cv2.contourArea(c) > (w * h * 0.08)]
-                if valid_cnts:
-                    largest_cnt = max(valid_cnts, key=cv2.contourArea)
-                    bx, by, bw, bh = cv2.boundingRect(largest_cnt)
-                    px = max(0, bx - int(bw * 0.02))
-                    py = max(0, by - int(bh * 0.02))
-                    pw = min(w - px, bw + int(bw * 0.04))
-                    ph = min(h - py, bh + int(bh * 0.04))
-                    if pw > 100 and ph > 100:
-                        return frame[py:py+ph, px:px+pw]
-        except Exception:
-            pass
-
-        return frame[int(h*0.1):int(h*0.9), int(w*0.2):int(w*0.85)]
+    def crop_fixed_box_region(self, frame):
+        """흔들림/깜빡임 없는 안정적인 고정 박스 영역 줌인"""
+        h, w = frame.shape[:2]
+        # 박스가 위치하는 중앙 메인 영역을 흔들림 없이 고정 크롭 (상하 10%~90%, 좌우 20%~85%)
+        return frame[int(h * 0.10):int(h * 0.90), int(w * 0.20):int(w * 0.85)]
 
     def update_camera_canvas(self):
-        """프로그램 좌측 하단에 주변부를 자르고 줌인된 박스 내부만 깔끔하게 렌더링"""
+        """초록선 제거 및 흔들림 없는 고정 줌인 화면 표시"""
         if self.current_webcam_frame is not None:
             frame = self.current_webcam_frame.copy()
-            cropped = self.crop_blue_box_region(frame)
+            cropped = self.crop_fixed_box_region(frame)
             self.latest_cropped_box = cropped
 
             target_w, target_h = 390, 230
@@ -317,9 +295,7 @@ class QRScanStationApp:
 
             resized = cv2.resize(cropped, (disp_w, disp_h))
 
-            # 정렬 상태 파악을 돕는 가이드 중앙선
-            cv2.line(resized, (disp_w//2, 0), (disp_w//2, disp_h), (0, 255, 120), 1)
-
+            # 초록색 선 제거 완료
             rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
             pil_img = Image.fromarray(rgb)
             self.cam_photo = ImageTk.PhotoImage(pil_img)
@@ -346,9 +322,8 @@ class QRScanStationApp:
 
         try:
             full_frame = self.current_webcam_frame.copy()
-            cropped_box = self.latest_cropped_box if self.latest_cropped_box is not None else self.crop_blue_box_region(full_frame)
+            cropped_box = self.latest_cropped_box if self.latest_cropped_box is not None else self.crop_fixed_box_region(full_frame)
 
-            # 1. 분기별/일자별/ITEM별 폴더 생성 및 줌인 사진 저장
             curr_model = self.current_model.get()
             q_folder_name = get_quarter_folder_name(curr_model)
             today_str = datetime.now().strftime("%Y-%m-%d")
@@ -358,10 +333,8 @@ class QRScanStationApp:
 
             safe_label_name = sanitize_filename(label_code)
             photo_path = os.path.join(target_save_dir, f"{safe_label_name}.jpg")
-            
             cv2.imwrite(photo_path, cropped_box)
 
-            # 2. 정밀 판정 (OK.jpg vs NG.jpg 기준)[cite: 5, 6]
             bh, bw = cropped_box.shape[:2]
 
             gray_box = cv2.cvtColor(cropped_box, cv2.COLOR_BGR2GRAY)
@@ -380,9 +353,7 @@ class QRScanStationApp:
             arrow_top = np.sum(right_edge[:bh//2, :] > 0)
             arrow_bottom = np.sum(right_edge[bh//2:, :] > 0)
 
-            # OK 조건: 
-            # 1) 좌측에 은색 가공면이 배치되고 우측은 어두운 완충재 정렬[cite: 5]
-            # 2) 우측 테두리의 화살표가 아래쪽을 지향 (OK 사진과 동일)[cite: 5]
+            # OK 조건: 은색 가공면 좌측 배치 및 파란 박스 화살표 하단 지향[cite: 5]
             part_dir_ok = (left_bright_ratio > (right_bright_ratio + 0.04))
             arrow_ok = (arrow_bottom >= arrow_top * 0.7)
 
@@ -395,7 +366,7 @@ class QRScanStationApp:
             return True, str(e)
 
     # ==========================================
-    # MANAGER MODE (2버튼 팝업)
+    # MANAGER MODE (3버튼 팝업: 중복재스캔 / 방향재판정 / Pallet QR 토글)
     # ==========================================
     def toggle_manager_mode(self):
         if self.active_popup or self.pallet_wait_popup:
@@ -438,10 +409,11 @@ class QRScanStationApp:
         dialog.transient(self.root)
         dialog.grab_set()
 
-        self.center_popup(dialog, 460, 240)
+        self.center_popup(dialog, 460, 310)
 
-        tk.Label(dialog, text="[ 관리자 작업 선택 ]", font=("맑은 고딕", 12, "bold"), fg="#38bdf8", bg=BG_PANEL).pack(pady=(18, 12))
+        tk.Label(dialog, text="[ 관리자 작업 선택 ]", font=("맑은 고딕", 12, "bold"), fg="#38bdf8", bg=BG_PANEL).pack(pady=(18, 10))
 
+        # [버튼 1] 중복 샘플 DMC 재스캔 버튼
         def act_rescan_dmc():
             self.is_manager_mode = True
             self.btn_manager.config(bg="#f59f00", fg="#000000", text=self.t("manager_btn_on"))
@@ -451,17 +423,34 @@ class QRScanStationApp:
 
         btn1 = tk.Button(dialog, text="🔄 중복 단품 DMC 재스캔 활성화", command=act_rescan_dmc,
                          bg="#1e3a5f", fg="#93c5fd", activebackground="#2b5278", activeforeground="#ffffff",
-                         font=("맑은 고딕", 10, "bold"), relief="flat", pady=8, cursor="hand2")
-        btn1.pack(fill=tk.X, padx=30, pady=5)
+                         font=("맑은 고딕", 10, "bold"), relief="flat", pady=7, cursor="hand2")
+        btn1.pack(fill=tk.X, padx=30, pady=4)
 
+        # [버튼 2] 적재 방향 즉시 재판정 버튼
         def act_rejudge_orientation():
             dialog.destroy()
             self.rejudge_loading_direction_now()
 
         btn2 = tk.Button(dialog, text="📷 박스 적재 방향 즉시 재판정 (웹캠)", command=act_rejudge_orientation,
                          bg="#1c3a24", fg="#8bd9a0", activebackground="#28a745", activeforeground="#ffffff",
-                         font=("맑은 고딕", 10, "bold"), relief="flat", pady=8, cursor="hand2")
-        btn2.pack(fill=tk.X, padx=30, pady=5)
+                         font=("맑은 고딕", 10, "bold"), relief="flat", pady=7, cursor="hand2")
+        btn2.pack(fill=tk.X, padx=30, pady=4)
+
+        # [버튼 3] Pallet QR 기능 ON/OFF 토글 버튼
+        status_txt = "현재: ON (스캔 필수)" if self.pallet_qr_feature_enabled else "현재: OFF (스캔 건너뜀)"
+        btn_color = "#374151" if self.pallet_qr_feature_enabled else "#0369a1"
+
+        def act_toggle_pallet_qr():
+            self.pallet_qr_feature_enabled = not self.pallet_qr_feature_enabled
+            new_st = "ON" if self.pallet_qr_feature_enabled else "OFF"
+            self.update_pallet_status_ui()
+            dialog.destroy()
+            messagebox.showinfo("설정 변경", f"Pallet QR 리딩 기능이 [{new_st}] 상태로 변경되었습니다.\n(※ 12박스 완료 시 자동으로 다시 ON으로 켜집니다.)", parent=self.root)
+
+        btn3 = tk.Button(dialog, text=f"📦 Pallet QR 리딩 기능 토글 [{status_txt}]", command=act_toggle_pallet_qr,
+                         bg=btn_color, fg="#ffffff", activebackground="#475569", activeforeground="#ffffff",
+                         font=("맑은 고딕", 9, "bold"), relief="flat", pady=7, cursor="hand2")
+        btn3.pack(fill=tk.X, padx=30, pady=4)
 
     def rejudge_loading_direction_now(self):
         curr_model = self.current_model.get()
@@ -504,6 +493,12 @@ class QRScanStationApp:
                 self.refresh_grouping_tab()
 
                 self.last_failed_label_code = ""
+
+                # 12박스 완료 시 Pallet QR 기능 자동 ON
+                if self.pallet_state[curr_model]["box_count"] >= MAX_BOXES_PER_PALLET:
+                    self.pallet_qr_feature_enabled = True
+                    self.update_pallet_status_ui()
+                    self.open_pallet_wait_popup()
         else:
             self.model_counts[curr_model]["ng"] += 1
             self.model_counts[curr_model]["total"] += 1
@@ -744,13 +739,13 @@ class QRScanStationApp:
         )
         self.lbl_pending_status.pack(fill=tk.X, padx=20, pady=(0, 4))
 
-        # 좌측 하단 스마트 박스 줌인 뷰어
+        # 좌측 하단 웹캠 뷰어 (초록선 제거 완료)
         cam_panel = tk.Frame(left_panel, bg=BG_PANEL)
         cam_panel.pack(fill=tk.BOTH, expand=True, padx=20, pady=(2, 10))
 
         top_info = tk.Frame(cam_panel, bg=BG_PANEL)
         top_info.pack(fill=tk.X)
-        tk.Label(top_info, text="📷 실시간 웹캠 (박스 자동 줌인)", font=("맑은 고딕", 9, "bold"), fg="#38bdf8", bg=BG_PANEL).pack(side=tk.LEFT)
+        tk.Label(top_info, text="📷 실시간 웹캠 뷰어", font=("맑은 고딕", 9, "bold"), fg="#38bdf8", bg=BG_PANEL).pack(side=tk.LEFT)
         self.lbl_cam_status = tk.Label(top_info, text="○ 연결 확인 중...", font=("맑은 고딕", 8, "bold"), fg="#f87171", bg=BG_PANEL)
         self.lbl_cam_status.pack(side=tk.RIGHT)
 
@@ -1038,7 +1033,8 @@ class QRScanStationApp:
         info = self.pallet_state.get(m, {"current_pallet": "", "box_count": 0})
         p_name = info["current_pallet"] if info["current_pallet"] else "-"
         b_cnt = info["box_count"]
-        self.lbl_pallet_status.config(text=self.t("pallet_status", pallet=p_name, boxes=b_cnt, max_b=MAX_BOXES_PER_PALLET))
+        toggle_status = "" if self.pallet_qr_feature_enabled else " [OFF 상태]"
+        self.lbl_pallet_status.config(text=self.t("pallet_status", pallet=p_name, boxes=b_cnt, max_b=MAX_BOXES_PER_PALLET) + toggle_status)
 
     def on_entry_key_release(self, event):
         if event.keysym in ("Return", "KP_Enter"):
@@ -1191,7 +1187,7 @@ class QRScanStationApp:
         
         self.pending_items.clear()
         self.pending_tree_ids.clear()
-        self.lbl_pending_status.config(text=self.t("pending_status", count=0))
+        self.lbl_pending_status.config(text=self.t("pending_status", count=len(self.pending_items)))
         self.update_pallet_status_ui()
 
         self.update_stat_cards()
@@ -1345,6 +1341,387 @@ class QRScanStationApp:
 
         threading.Thread(target=_loader, daemon=True).start()
 
+    def is_pallet_qr(self, code):
+        c = code.strip().upper()
+        if ';' in c:
+            return False
+        if c.startswith("PALLET") or c.startswith("KR02") or " " in c or "\t" in c:
+            return True
+        return False
+
+    def process_scan(self, raw_code):
+        if self.auto_submit_timer:
+            self.root.after_cancel(self.auto_submit_timer)
+            self.auto_submit_timer = None
+
+        raw_code = raw_code.strip()
+        self.scan_entry.delete(0, tk.END)
+        self.global_scan_buffer.clear()
+
+        if not raw_code:
+            return
+
+        if self.active_popup:
+            return
+
+        now = datetime.now()
+        day_str = now.strftime("%Y-%m-%d")
+        time_str = now.strftime("%H:%M:%S")
+        timestamp_full = f"{day_str} {time_str}"
+
+        curr_model = self.current_model.get()
+        target_code = MODEL_CONFIG[curr_model].upper()
+
+        # ==========================================
+        # 1. Pallet QR 스캔 처리 (기능 ON 상태일 때만 동작)
+        # ==========================================
+        if self.is_pallet_qr(raw_code):
+            if not self.pallet_qr_feature_enabled:
+                # Pallet QR 기능 OFF 상태인 경우 무시
+                return
+
+            upper_pallet_code = raw_code.upper()
+
+            if target_code not in upper_pallet_code:
+                self.set_status("Pallet NG", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text=self.t("ng_pallet_model_title"),
+                    msg=self.t("ng_pallet_model_msg", model=curr_model, target=target_code, code=upper_pallet_code),
+                    header_bg="#2d1d20", header_fg="#f87171"
+                )
+                return
+
+            if len(self.pending_items) > 0:
+                self.set_status("Pallet NG", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text=self.t("ng_pallet_mid_title"),
+                    msg=self.t("ng_pallet_mid_msg", count=len(self.pending_items)),
+                    header_bg="#2d1d20", header_fg="#f87171"
+                )
+                return
+
+            prev_pallet = self.pallet_state[curr_model]["current_pallet"]
+            curr_box_count = self.pallet_state[curr_model]["box_count"]
+
+            if (prev_pallet and curr_box_count == 0) or (upper_pallet_code in self.scanned_pallet_by_model[curr_model]):
+                self.set_status("Pallet NG", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text=self.t("ng_pallet_dup_title"),
+                    msg=self.t("ng_pallet_dup_msg"),
+                    header_bg="#2d1d20", header_fg="#f87171"
+                )
+                return
+
+            if prev_pallet and curr_box_count >= 1:
+                self.direct_append_pallet_header(curr_model, prev_pallet, "Final HEADER", "[Pallet Grouping Done]", timestamp_full, include_time=False)
+                self.tree.insert("", 0, values=(prev_pallet, "", "", "", "[Pallet Grouping Done]", "OK", ""), tags=("pallet_row",))
+
+            self.pallet_state[curr_model]["current_pallet"] = upper_pallet_code
+            self.pallet_state[curr_model]["box_count"] = 0
+            self.scanned_pallet_by_model[curr_model].add(upper_pallet_code)
+            self.save_pallet_state()
+            self.update_pallet_status_ui()
+
+            # 신규 Pallet 리딩 시 DAY, TIME 정확히 기록
+            self.direct_append_pallet_header(curr_model, upper_pallet_code, "Final HEADER", "[Pallet Grouping Start]", timestamp_full, include_time=True)
+            self.tree.insert("", 0, values=(upper_pallet_code, day_str, time_str, "", "[Pallet Grouping Start]", "OK", ""), tags=("pallet_row",))
+
+            self.close_pallet_wait_popup()
+            self.refresh_grouping_tab()
+            self.set_status("OK", "#28a745", "#193322")
+            return
+
+        current_time = time.time()
+        if raw_code == self.last_scanned_code and (current_time - self.last_scanned_time) < 2.0:
+            return
+
+        self.last_scanned_code = raw_code
+        self.last_scanned_time = current_time
+
+        scanned_prefix = raw_code[:10].upper()
+        clean_upper_code = raw_code.upper()
+        is_label_qr = (raw_code.count(';') >= 3)
+        self.lbl_last_scan.config(text=f"{self.t('last_scan')}: {raw_code}")
+
+        if scanned_prefix != target_code:
+            self.set_status("NG", "#dc3545", "#3a1c1f")
+            self.open_lock_popup(
+                title_text=self.t("ng_model_title"),
+                msg=self.t("ng_model_msg", model=curr_model, target=target_code, code=raw_code[:12]),
+                header_bg="#2d1d20", header_fg="#f87171"
+            )
+            return
+
+        if not is_label_qr and clean_upper_code in self.sorting_list_by_model[curr_model]:
+            self.set_status("SORTING", "#f59f00", "#3d2716")
+            self.direct_mark_sorting_ok(curr_model, raw_code)
+            self.open_sorting_popup(raw_code)
+            return
+
+        # ==========================================
+        # 2. Label QR 스캔 (+ 비전 방향 판정 및 분기/일자별 사진 저장)
+        # ==========================================
+        if is_label_qr:
+            curr_box_cnt = self.pallet_state[curr_model]["box_count"]
+
+            if self.pallet_qr_feature_enabled and curr_box_cnt >= MAX_BOXES_PER_PALLET:
+                self.set_status("Pallet NG", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text=self.t("ng_pallet_limit_title"),
+                    msg=self.t("ng_pallet_limit_msg"),
+                    header_bg="#2d1d20", header_fg="#f87171"
+                )
+                return
+
+            if raw_code in self.scanned_label_by_model[curr_model]:
+                self.set_status("Label QR NG", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text=self.t("ng_label_dup_title"),
+                    msg=self.t("ng_label_dup_msg", code=raw_code[:35]),
+                    header_bg="#2d1d20", header_fg="#f87171"
+                )
+                return
+
+            tokens = raw_code.split(';')
+            expected_qty = None
+            if len(tokens) >= 2 and tokens[1].isdigit():
+                expected_qty = int(tokens[1])
+
+            current_scanned_qty = len(self.pending_items)
+
+            if expected_qty is not None and expected_qty != current_scanned_qty:
+                self.set_status("Grouping NG", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text=self.t("ng_group_title"),
+                    msg=self.t("ng_group_msg", expected=expected_qty, current=current_scanned_qty),
+                    header_bg="#2d1d20", header_fg="#f87171"
+                )
+                return
+
+            # 비전 판정 실행
+            vision_ok, detail = self.inspect_front_loading_direction(raw_code)
+            if not vision_ok:
+                self.last_failed_label_code = raw_code
+                self.model_counts[curr_model]["ng"] += 1
+                self.model_counts[curr_model]["total"] += 1
+                self.save_model_counts()
+                self.update_stat_cards()
+
+                self.set_status("방향 NG", "#dc3545", "#3a1c1f")
+                ng_note = f"[적재방향 NG: {detail}]"
+                cur_pallet = self.pallet_state[curr_model]["current_pallet"]
+                self.tree.insert("", 0, values=(cur_pallet, day_str, time_str, raw_code, "[적재 방향 불량]", "NG", ng_note), tags=("ng_row",))
+                self.direct_record_ng_log(curr_model, cur_pallet, raw_code, timestamp_full, ng_note)
+
+                self.open_lock_popup(
+                    title_text=self.t("ng_direction_title"),
+                    msg=self.t("ng_direction_msg"),
+                    header_bg="#3a1c1f", header_fg="#ff6b6b"
+                )
+                return
+
+        # ==========================================
+        # 3. 단품 QR 스캔 처리
+        # ==========================================
+        if not is_label_qr:
+            if len(self.pending_items) >= MAX_ITEMS_PER_BOX:
+                self.set_status("NG", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text=self.t("ng_limit_title"),
+                    msg=self.t("ng_limit_msg", max_cnt=MAX_ITEMS_PER_BOX),
+                    header_bg="#2d1d20", header_fg="#f87171"
+                )
+                return
+
+            is_already_scanned = (clean_upper_code in self.scanned_history_by_model[curr_model])
+
+            if self.is_manager_mode:
+                if not is_already_scanned:
+                    self.set_status("NG", "#dc3545", "#3a1c1f")
+                    self.open_lock_popup(
+                        title_text=self.t("ng_mgr_err_title"),
+                        msg=self.t("ng_mgr_err_msg", code=raw_code),
+                        header_bg="#2d1d20", header_fg="#f87171"
+                    )
+                    return
+                else:
+                    self.set_status("OK", "#28a745", "#193322")
+                    cur_p = self.pallet_state[curr_model]["current_pallet"]
+                    item_data = {
+                        "pallet": cur_p,
+                        "day": day_str,
+                        "time": time_str,
+                        "code": raw_code,
+                        "result": "OK"
+                    }
+                    self.tree.insert("", 0, values=(cur_p, day_str, time_str, "", raw_code, "OK", "[DMC 재스캔]"))
+                    self.direct_append_single_item(curr_model, item_data)
+                    self.is_manager_mode = False
+                    self.btn_manager.config(bg="#2c323d", fg="#adb5bd", text=self.t("manager_btn"))
+                    return
+
+            else:
+                if is_already_scanned:
+                    self.model_counts[curr_model]["ng"] += 1
+                    self.model_counts[curr_model]["total"] += 1
+                    self.save_model_counts()
+                    self.update_stat_cards()
+
+                    self.set_status("QR NG", "#fd7e14", "#3d2716")
+
+                    cur_p = self.pallet_state[curr_model]["current_pallet"]
+                    dup_text = self.t("dup_scan_tag")
+                    self.tree.insert("", 0, values=(cur_p, day_str, time_str, "-", raw_code, "NG", dup_text), tags=("ng_row",))
+
+                    matched_label_qr = None
+                    for item_id in self.tree.get_children():
+                        vals = list(self.tree.item(item_id, "values"))
+                        if not vals:
+                            continue
+                        if vals[4].strip().upper() == clean_upper_code and vals[5] != "NG":
+                            matched_label_qr = vals[3]
+                            vals[5] = "NG"
+                            vals[6] = dup_text
+                            self.tree.item(item_id, values=vals, tags=("ng_row",))
+                            break
+
+                    if matched_label_qr and matched_label_qr != "-":
+                        for item_id in self.tree.get_children():
+                            vals = list(self.tree.item(item_id, "values"))
+                            if vals and vals[3] == matched_label_qr and ("[" in str(vals[4])):
+                                vals[5] = "NG"
+                                self.tree.item(item_id, values=vals, tags=("ng_row",))
+                                break
+
+                    self.direct_handle_dmc_duplicate(curr_model, raw_code, day_str, time_str, matched_label_qr, dup_text, cur_p)
+
+                    self.open_lock_popup(
+                        title_text=self.t("ng_dup_title"),
+                        msg=self.t("ng_dup_msg", code=raw_code),
+                        header_bg="#352316", header_fg="#fb923c"
+                    )
+                    return
+
+        self.set_status("OK", "#28a745", "#193322")
+        cur_pallet = self.pallet_state[curr_model]["current_pallet"]
+
+        if not is_label_qr:
+            self.model_counts[curr_model]["ok"] += 1
+            self.model_counts[curr_model]["total"] += 1
+            self.save_model_counts()
+            self.update_stat_cards()
+
+            self.scanned_history_by_model[curr_model].add(clean_upper_code)
+            item_data = {
+                "pallet": cur_pallet,
+                "day": day_str,
+                "time": time_str,
+                "code": raw_code,
+                "result": "OK"
+            }
+            self.pending_items.append(item_data)
+            
+            item_id = self.tree.insert("", 0, values=(cur_pallet, day_str, time_str, "", raw_code, "OK", ""))
+            self.pending_tree_ids.append(item_id)
+            self.lbl_pending_status.config(text=self.t("pending_status", count=len(self.pending_items)))
+
+            self.direct_append_single_item(curr_model, item_data)
+
+        else:
+            self.scanned_label_by_model[curr_model].add(raw_code)
+
+            for t_id in self.pending_tree_ids:
+                curr_vals = self.tree.item(t_id, "values")
+                if curr_vals:
+                    self.tree.item(t_id, values=(cur_pallet, curr_vals[1], curr_vals[2], raw_code, curr_vals[4], curr_vals[5], curr_vals[6]))
+
+            items_to_bundle = list(self.pending_items)
+            bundle_count = len(items_to_bundle)
+            header_text = self.t("box_complete", count=bundle_count)
+
+            self.tree.insert("", 0, values=(cur_pallet, day_str, time_str, raw_code, header_text, "OK", f"[적재방향 OK: {detail}]"))
+
+            self.pending_items.clear()
+            self.pending_tree_ids.clear()
+            self.lbl_pending_status.config(text=self.t("pending_status", count=0))
+
+            self.pallet_state[curr_model]["box_count"] += 1
+            self.save_pallet_state()
+            self.update_pallet_status_ui()
+
+            self.root.update_idletasks()
+
+            self.direct_finalize_excel_group(curr_model, cur_pallet, raw_code, timestamp_full, items_to_bundle, header_text, extra_content=f"[적재방향 OK: {detail}]")
+            self.refresh_grouping_tab()
+
+            # 12박스 완료 시 처리: 자동으로 Pallet QR 기능 ON으로 복원 및 팝업 대기
+            if self.pallet_state[curr_model]["box_count"] >= MAX_BOXES_PER_PALLET:
+                self.pallet_qr_feature_enabled = True
+                self.update_pallet_status_ui()
+                self.open_pallet_wait_popup()
+
+        self.scan_entry.focus_set()
+
+    # ==========================================
+    # 엑셀 I/O 로직 (Pallet QR 스캔 일시 반영)
+    # ==========================================
+    def open_or_init_workbook(self, filepath):
+        unhide_file(filepath)
+        if os.path.exists(filepath):
+            try:
+                wb = openpyxl.load_workbook(filepath)
+                if "스캔실적" in wb.sheetnames:
+                    ws = wb["스캔실적"]
+                else:
+                    sheets = [s for s in wb.worksheets if s.title != "sorting"]
+                    ws = sheets[0] if sheets else wb.create_sheet(title="스캔실적", index=0)
+                
+                if ws.cell(row=1, column=1).value != "Pallet Label QR":
+                    ws.insert_cols(1)
+                    ws.cell(row=1, column=1, value="Pallet Label QR")
+                    header_fill = PatternFill(start_color="1F242D", end_color="1F242D", fill_type="solid")
+                    header_font = Font(name="맑은 고딕", size=11, bold=True, color="FFFFFF")
+                    ws.cell(row=1, column=1).fill = header_fill
+                    ws.cell(row=1, column=1).font = header_font
+                    ws.cell(row=1, column=1).alignment = Alignment(horizontal="center", vertical="center")
+                    ws.column_dimensions['A'].width = 30
+                return wb, ws
+            except Exception:
+                pass
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "스캔실적"
+
+        headers = ["Pallet Label QR", "Label QR (Box/Lot)", "Label 스캔일시", "단품 순번", "단품 DMC", "단품 스캔일시", "판정", "Content"]
+        ws.append(headers)
+
+        header_fill = PatternFill(start_color="1F242D", end_color="1F242D", fill_type="solid")
+        header_font = Font(name="맑은 고딕", size=11, bold=True, color="FFFFFF")
+
+        for col in range(1, 9):
+            cell = ws.cell(row=1, column=col)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        ws.column_dimensions['A'].width = 30
+        ws.column_dimensions['B'].width = 46
+        ws.column_dimensions['C'].width = 20
+        ws.column_dimensions['D'].width = 12
+        ws.column_dimensions['E'].width = 34
+        ws.column_dimensions['F'].width = 20
+        ws.column_dimensions['G'].width = 14
+        ws.column_dimensions['H'].width = 18
+
+        ws_sort = wb.create_sheet(title="sorting")
+        ws_sort.cell(row=1, column=2, value="Sorting 대상 DMC Code")
+        ws_sort.cell(row=1, column=3, value="판정")
+        ws_sort.column_dimensions['B'].width = 35
+        ws_sort.column_dimensions['C'].width = 12
+
+        return wb, ws
+
     def direct_append_pallet_header(self, model_name, pallet_code, seq_val, text_val, timestamp_full, include_time=True):
         with self.file_lock:
             try:
@@ -1373,7 +1750,7 @@ class QRScanStationApp:
 
                 wb.save(filepath)
                 hide_file(filepath)
-            except Exception as e:
+            except Exception:
                 pass
 
     def direct_mark_sorting_ok(self, model_name, raw_code):
