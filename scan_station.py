@@ -1,11 +1,11 @@
 import os
 import sys
+import re
 import json
 import time
 import glob
 import ctypes
 import threading
-import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
@@ -13,13 +13,10 @@ from datetime import datetime
 try:
     import cv2
     import numpy as np
-    import pyautogui
-    import pygetwindow as gw
-    import win32gui
+    from PIL import Image, ImageTk
     CV_AVAILABLE = True
 except ImportError:
     CV_AVAILABLE = False
-    win32gui = None
 
 try:
     import winsound
@@ -30,14 +27,13 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # ==========================================
-# 1. REAR 전용 모델 및 카메라 설정
+# 1. FRONT 전용 모델 설정
 # ==========================================
 MODEL_CONFIG = {
-    'S-REAR':  'MPL02914AD',
-    'R-REAR':  'MPL02925AD'
+    'S-FRONT': 'MPL02916AD',
+    'R-FRONT': 'MPL02926AD'
 }
 
-TARGET_CAM_NAME = "Aluko 4"
 CODE_TO_MODEL = {v: k for k, v in MODEL_CONFIG.items()}
 DEFAULT_PASSWORD = "123456"
 MAX_ITEMS_PER_BOX = 10
@@ -49,10 +45,10 @@ def get_base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 BASE_DIR = get_base_dir()
-COUNT_FILE = os.path.join(BASE_DIR, "counts_rear.json")
-STATE_FILE = os.path.join(BASE_DIR, "pallet_state_rear.json")
-CAPTURE_DIR = os.path.join(BASE_DIR, "captures_rear")
-os.makedirs(CAPTURE_DIR, exist_ok=True)
+COUNT_FILE = os.path.join(BASE_DIR, "counts_front.json")
+STATE_FILE = os.path.join(BASE_DIR, "pallet_state_front.json")
+CAPTURE_BASE_DIR = os.path.join(BASE_DIR, "captures_front")
+os.makedirs(CAPTURE_BASE_DIR, exist_ok=True)
 
 FILE_ATTRIBUTE_NORMAL = 0x80
 FILE_ATTRIBUTE_HIDDEN = 0x02
@@ -71,17 +67,25 @@ def hide_file(filepath):
     except Exception:
         pass
 
-def get_quarter_filename(model_name, dt=None):
+def get_quarter_folder_name(model_name, dt=None):
     if dt is None:
         dt = datetime.now()
     year_2d = dt.strftime("%y")
     quarter = (dt.month - 1) // 3 + 1
     safe_model = model_name.replace('-', '_')
-    return f"Y{year_2d}_{quarter}Q_{safe_model}.xlsx"
+    return f"Y{year_2d}_{quarter}Q_{safe_model}"
+
+def get_quarter_filename(model_name, dt=None):
+    q_folder = get_quarter_folder_name(model_name, dt)
+    return f"{q_folder}.xlsx"
+
+def sanitize_filename(name):
+    # 파일명으로 사용할 수 없는 특수문자 치환
+    return re.sub(r'[\/:*?"<>|;]', '_', name).strip()
 
 LANG_PACK = {
     "한국어": {
-        "title": "QR SCAN STATION [REAR]",
+        "title": "QR SCAN STATION [FRONT]",
         "pw_setting": "⚙ 비밀번호 설정",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -119,8 +123,8 @@ LANG_PACK = {
         "ng_pallet_model_msg": "[NG: Pallet QR 모델 코드가 일치하지 않습니다]\n\n현재 선택 모델: {model} ({target})\n스캔 Pallet QR: {code}\n\n올바른 Pallet QR을 준비한 뒤 관리자 비밀번호로 해제하세요.",
         "ng_pallet_dup_title": "🚫 NG - Pallet QR 중복/순서 오류",
         "ng_pallet_dup_msg": "[NG: Pallet QR 중복 리딩 또는 박스 미완료]\n\n1) 최소 1개 이상의 박스를 완료한 후에만 팔레트 교체가 가능합니다.\n2) 이미 사용된 Pallet QR은 중복 등록할 수 없습니다.\n\n관리자 비밀번호를 입력하여 해제하세요.",
-        "ng_orientation_title": "🚫 NG - 제품 적재 방향 오류",
-        "ng_orientation_msg": "[비전 판정 NG: 제품 적입 방향 불일치]\n\nREAR 제품의 상단 방향이 올바르지 않습니다.\n은색 알루미늄 가공면이 보이지 않고 검은색 면이 노출되었습니다.\n\n제품을 올바른 방향으로 고친 뒤 [MANAGER MODE]의 '적재 방향 재판정'을 누르세요.",
+        "ng_direction_title": "🚫 NG - 제품 적재 방향 오류",
+        "ng_direction_msg": "[비전 판정 NG: 제품 적입 방향 불일치]\n\n박스의 화살표 방향(아래 방향) 및 제품 10개의 적재 방향이 올바르지 않습니다.\n\n제품을 올바른 방향으로 고친 뒤 [MANAGER MODE]의 '적재 방향 재판정'을 누르세요.",
         "ng_label_dup_title": "⚠️ Label QR NG - 중복 스캔",
         "ng_label_dup_msg": "[Label QR NG: 이미 사용된 Label QR입니다]\n\n스캔 Label QR: {code}...\n이미 등록/포장 완료된 중복 라벨입니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_group_title": "⚠️ Grouping NG - 수량 불일치",
@@ -140,128 +144,6 @@ LANG_PACK = {
         "unlock_btn": "확인 및 잠금 해제",
         "confirm_btn": "확인 (Enter)",
         "pw_err": "비밀번호가 올바르지 않습니다."
-    },
-    "English": {
-        "title": "QR SCAN STATION [REAR]",
-        "pw_setting": "⚙ Password Setting",
-        "tab_scan": "  QR Scan  ",
-        "tab_grouping": "  Grouping  ",
-        "tab_recode": "  Re-code  ",
-        "model_label": "Model",
-        "code_label": "Part No",
-        "last_scan": "Last Scan",
-        "input_guide": "Barcode Scan Input (Focus anywhere)",
-        "reset_btn": "RESET (Clear Counter)",
-        "manager_btn": "MANAGER MODE",
-        "manager_btn_on": "MANAGER [DMC Rescan Standby]",
-        "pending_status": "Ungrouped: {count} pcs – Waiting for Label QR",
-        "pallet_status": "Current Pallet: {pallet} ({boxes}/{max_b} Boxes)",
-        "record_header": "{model} Records",
-        "grouping_header": "{model} Pallet - Box Grouping Overview",
-        "th_pallet": "Pallet Label QR",
-        "th_box_seq": "Box Seq",
-        "th_day": "DAY",
-        "th_time": "TIME",
-        "th_label": "Label QR",
-        "th_dmc": "DMC",
-        "th_judgment": "JUDGMENT",
-        "th_content": "Content",
-        "filter_day": "Date Range:",
-        "filter_time": "Time Range:",
-        "search_btn": "🔍 Search",
-        "save_btn": "💾 Save (Excel Export)",
-        "box_complete": "[Box Grouping Done: {count} pcs]",
-        "dup_scan_tag": "[Duplicate Scan]",
-        "sorting_title": "⚠️ Sorting Required Alert",
-        "sorting_msg": "[Alert: Sorting Required Product]\n\nDMC Code: {code}\n\nThis product is registered in the Sorting list.\nIsolate the part and press [Enter] to continue.",
-        "ng_model_title": "⚠️ NG - Model Mismatch",
-        "ng_model_msg": "[NG: Scanned barcode does not match selected model]\n\nSelected Model: {model} ({target})\nScanned Code: {code}\n\nEnter 6-digit Admin Password to unlock.",
-        "ng_pallet_model_title": "⚠️ NG - Pallet Model Mismatch",
-        "ng_pallet_model_msg": "[NG: Pallet QR model code does not match]\n\nSelected Model: {model} ({target})\nScanned Pallet QR: {code}\n\nEnter 6-digit Admin Password to unlock.",
-        "ng_pallet_dup_title": "🚫 NG - Duplicate Pallet Scan",
-        "ng_pallet_dup_msg": "[NG: Pallet QR Duplicate or Sequence Error]\n\n1) At least 1 box must be completed before closing the pallet.\n2) Cannot re-scan an already closed Pallet QR.\n\nEnter Admin Password to unlock.",
-        "ng_orientation_title": "🚫 NG - Incorrect Loading Orientation",
-        "ng_orientation_msg": "[Vision NG: Incorrect Loading Direction]\n\nREAR parts are loaded in reverse.\nDark surface detected instead of bright aluminum surface.\n\nFix orientation and click 'Re-judge Orientation' in MANAGER MODE.",
-        "ng_label_dup_title": "⚠️ Label QR NG - Duplicate Label",
-        "ng_label_dup_msg": "[Label QR NG: This Label QR is already used]\n\nScanned Label: {code}...\nDuplicate box label detected.\n\nEnter 6-digit Admin Password to unlock.",
-        "ng_group_title": "⚠️ Grouping NG - Quantity Mismatch",
-        "ng_group_msg": "[Grouping NG: Scanned quantity does not match Label quantity]\n\nLabel Target Qty: {expected} pcs\nCurrently Scanned Qty: {current} pcs\n\nCannot proceed with grouping.\nEnter 6-digit Admin Password to unlock.",
-        "ng_limit_title": "⚠️ NG - Label QR Missing",
-        "ng_limit_msg": "[NG: Label QR Missing]\n\nAlready reached maximum capacity ({max_cnt} pcs).\n11th item is rejected and not saved.\nScan Label QR first to complete the box.\n\nEnter 6-digit Admin Password to unlock.",
-        "ng_mgr_err_title": "⚠️ NG - Manager Mode Error",
-        "ng_mgr_err_msg": "[NG: New QR must be scanned in Normal Mode]\n\nScanned Barcode: {code}\nNew parts cannot be added under Rescan Mode.\n\nEnter 6-digit Admin Password to unlock.",
-        "ng_dup_title": "🚫 QR NG - Duplicate Part Detected",
-        "ng_dup_msg": "[QR NG: Duplicate part barcode detected]\n\nScanned Barcode: {code}\nThis part and associated Box Header are marked as NG.\n\nEnter 6-digit Admin Password to unlock.",
-        "ng_pallet_mid_title": "⚠️ NG - Invalid Pallet Scan Timing",
-        "ng_pallet_mid_msg": "[NG: Cannot scan Pallet QR while box packing is in progress]\n\nCurrently {count} items are pending.\nFinish 10 items and Label QR before scanning Pallet QR.",
-        "ng_pallet_limit_title": "🚫 NG - Pallet QR Missing (Exceeded 12 Boxes)",
-        "ng_pallet_limit_msg": "[NG: Pallet QR Missing]\n\n12 boxes are already filled.\nCannot pack 13th box without scanning a new Pallet QR.\n\nEnter Admin Password to unlock.",
-        "pallet_popup_title": "Waiting for Pallet QR",
-        "pallet_popup_msg": "12 boxes completed on current pallet.\nPlease scan new Pallet QR.",
-        "unlock_btn": "Confirm & Unlock",
-        "confirm_btn": "Confirm (Enter)",
-        "pw_err": "Incorrect Password."
-    },
-    "Polski": {
-        "title": "QR SCAN STATION [REAR]",
-        "pw_setting": "⚙ Ustawienie hasła",
-        "tab_scan": "  Skan QR  ",
-        "tab_grouping": "  Grupowanie  ",
-        "tab_recode": "  Re-code  ",
-        "model_label": "Model",
-        "code_label": "Kod części",
-        "last_scan": "Ostatni skan",
-        "input_guide": "Wejście skanera (skanuj w dowolnym miejscu)",
-        "reset_btn": "RESET (Zeruj licznik)",
-        "manager_btn": "TRYB MENEDŻERA",
-        "manager_btn_on": "TRYB MENEDŻERA [DMC Oczekiwanie]",
-        "pending_status": "Oczekujące: {count} szt. – Oczekiwanie na Label QR",
-        "pallet_status": "Bieżąca paleta: {pallet} ({boxes}/{max_b} pudełek)",
-        "record_header": "{model} Historia",
-        "grouping_header": "{model} Przegląd grupowania Paleta - Pudełko",
-        "th_pallet": "Pallet Label QR",
-        "th_box_seq": "Nr pudełka",
-        "th_day": "DZIEŃ",
-        "th_time": "CZAS",
-        "th_label": "Label QR",
-        "th_dmc": "DMC",
-        "th_judgment": "STATUS",
-        "th_content": "Treść",
-        "filter_day": "Zakres dat:",
-        "filter_time": "Przedział czasu:",
-        "search_btn": "🔍 Szukaj",
-        "save_btn": "💾 Zapisz (Eksport Excel)",
-        "box_complete": "[Pakiet ukończony: {count} szt.]",
-        "dup_scan_tag": "[Duplikat skanu]",
-        "sorting_title": "⚠️ Wymagane sortowanie",
-        "sorting_msg": "[Uwaga: Wymagane sortowanie produktu]\n\nKod DMC: {code}\n\nTen produkt znajduje się na liście sortowania.\nOdizoluj część i naciśnij [Enter], aby kontynuować.",
-        "ng_model_title": "⚠️ NG - Niezgodność modelu",
-        "ng_model_msg": "[NG: Zeskanowany kod nie pasuje do wybranego modelu]\n\nWybrany model: {model} ({target})\nKod: {code}\n\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
-        "ng_pallet_model_title": "⚠️ NG - Niezgodność modelu palety",
-        "ng_pallet_model_msg": "[NG: Kod modelu na etykiecie palety nie pasuje]\n\nWybrany model: {model} ({target})\nPaleta: {code}\n\nWprowadź 6-cyfrowe hasło administratora.",
-        "ng_pallet_dup_title": "🚫 NG - Błąd duplikatu palety",
-        "ng_pallet_dup_msg": "[NG: Błąd skanowania palety]\n\n1) Należy ukończyć co najmniej 1 pudełko przed zamknięciem palety.\n2) Nie można ponownie użyć zarejestrowanej palety.\n\nWprowadź hasło administratora.",
-        "ng_orientation_title": "🚫 NG - Nieprawidłowa orientacja załadunku",
-        "ng_orientation_msg": "[Wizja NG: Nieprawidłowa orientacja załadunku REAR]\n\nWykryto ciemną powierzchnię zamiast jasnej powierzchni aluminiowej.\n\nPopraw orientację i kliknij 'Ponowna ocena orientacji' w TRYBIE MENEDŻERA.",
-        "ng_label_dup_title": "⚠️ Label QR NG - Duplikat etykiety",
-        "ng_label_dup_msg": "[Label QR NG: Ta etykieta została 이미 사용되었습니다]\n\nZeskanowana etykieta: {code}...\nWykryto duplikat etykiety pudełka.\n\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
-        "ng_group_title": "⚠️ Grouping NG - Niezgodność ilości",
-        "ng_group_msg": "[Grouping NG: Ilość sztuk nie zgadza się z etykietą]\n\nIlość na etykiecie: {expected} szt.\nZeskanowano: {current} szt.\n\nNie można utworzyć grupy.\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
-        "ng_limit_title": "⚠️ NG - Brak Label QR",
-        "ng_limit_msg": "[NG: Brak Label QR]\n\nOsiągnięto limit pudełka ({max_cnt} szt.).\n11. element nie został zapisany.\nZeskanuj najpierw Label QR.\n\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
-        "ng_mgr_err_title": "⚠️ NG - Błąd trybu menedżera",
-        "ng_mgr_err_msg": "[NG: Nowe części należy skanować w trybie standardowym]\n\nZeskanowany kod: {code}\nNowy element został odrzucony.\n\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
-        "ng_dup_title": "🚫 QR NG - Wykryto zduplikowany element",
-        "ng_dup_msg": "[QR NG: Kod tego elementu został 이미 이전 기록에 있습니다]\n\nZeskanowany kod: {code}\nTen element i nagłówek partii oznaczono jako NG.\n\nWprowadź 6-cyfrowe hasło administratora, aby odblokować.",
-        "ng_pallet_mid_title": "⚠️ NG - Błędny moment skanowania palety",
-        "ng_pallet_mid_msg": "[NG: Nie można skanować kodu palety podczas pakowania pudełka]\n\nObecnie oczekuje {count} elementów.\nZakończ 10 sztuk i Label QR przed zeskanowaniem palety.",
-        "ng_pallet_limit_title": "🚫 NG - Brak kodu palety (Przekroczono 12 pudełek)",
-        "ng_pallet_limit_msg": "[NG: Wymagany nowy kod palety]\n\nZapakowano już 12 pudełek.\nNie można kontynuować 13. pudełka bez nowej palety.\n\nWprowadź hasło administratora.",
-        "pallet_popup_title": "Oczekiwanie na kod palety",
-        "pallet_popup_msg": "Ukończono 12 pudełek na palecie.\nZeskanuj kod nowej palety.",
-        "unlock_btn": "Potwierdź i odblokuj",
-        "confirm_btn": "Potwierdź (Enter)",
-        "pw_err": "Nieprawidłowe hasło."
     }
 }
 
@@ -276,18 +158,25 @@ ACCENT_YELLOW = "#f59f00"
 class QRScanStationApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("QR SCAN STATION [REAR]")
+        self.root.title("QR SCAN STATION [FRONT]")
         self.root.geometry("1440x880")
         self.root.minsize(1280, 780)
         self.root.configure(bg=BG_MAIN)
 
         self.current_lang = tk.StringVar(value="한국어")
-        self.current_model = tk.StringVar(value='S-REAR')
+        self.current_model = tk.StringVar(value='S-FRONT')
         self.admin_password = DEFAULT_PASSWORD
         self.model_session_id = 0
 
-        self.is_manager_mode = False  # 중복 DMC 재스캔 대기 플래그
-        self.last_failed_label_code = ""  # 방향 NG 발생 시 보관해 둘 라벨 코드
+        self.is_manager_mode = False
+        self.last_failed_label_code = ""
+
+        # 웹캠 관련 제어 변수
+        self.cap = None
+        self.current_webcam_frame = None
+        self.is_camera_ready = False
+        self.cam_thread_running = True
+        self.cam_photo = None
 
         self.active_popup = None
         self.pallet_wait_popup = None
@@ -309,16 +198,14 @@ class QRScanStationApp:
         self.file_lock = threading.Lock()
         self.global_scan_buffer = []
 
-        self.embedded_window_hwnd = None
-        self.is_monitoring_running = True
-
         self.setup_custom_styles()
         self.setup_ui()
         self.setup_global_key_listener()
         self.on_model_changed()
 
-        # LDPlayer 9 자동 실행 및 Aluko 4 도킹 스레드 시작
-        self.start_ldplayer_automation()
+        # USB 웹캠 직결 스트림 구동
+        self.start_usb_webcam_stream()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def t(self, key, **kwargs):
         pack = LANG_PACK.get(self.current_lang.get(), LANG_PACK["한국어"])
@@ -336,93 +223,135 @@ class QRScanStationApp:
         threading.Thread(target=_beep, daemon=True).start()
 
     # ==========================================
-    # LDPlayer 9 자동 구동 및 좌측 하단 도킹
+    # USB 웹캠 직접 연결 스트림
     # ==========================================
-    def start_ldplayer_automation(self):
-        def _auto():
-            # 1. LDPlayer 9 기본 설치 경로 탐색
-            ld_paths = [
-                r"C:\LDPlayer\LDPlayer9\dnplayer.exe",
-                r"D:\LDPlayer\LDPlayer9\dnplayer.exe",
-                r"C:\Program Files\LDPlayer\LDPlayer9\dnplayer.exe"
-            ]
-            ld_exe = next((p for p in ld_paths if os.path.exists(p)), None)
-            if ld_exe:
-                targets = [w for w in gw.getAllWindows() if any(k in w.title.lower() for k in ['ldplayer', 'dnplayer'])] if gw else []
-                if not targets:
-                    subprocess.Popen([ld_exe])
-                    time.sleep(8)
+    def start_usb_webcam_stream(self):
+        def _webcam_worker():
+            if CV_AVAILABLE:
+                self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+                if not self.cap.isOpened():
+                    self.cap = cv2.VideoCapture(0)
 
-            # 2. LDPlayer 창을 UI 좌측 하단 프레임 안으로 도킹
-            while self.is_monitoring_running and not self.embedded_window_hwnd:
-                try:
-                    if gw and win32gui:
-                        targets = [w for w in gw.getAllWindows() if any(k in w.title.lower() for k in ['ldplayer', 'dnplayer'])]
-                        if targets:
-                            win = targets[0]
-                            hwnd = win._hWnd
-                            parent_hwnd = self.cam_container.winfo_id()
+                if self.cap.isOpened():
+                    self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                    self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                    self.is_camera_ready = True
+                    self.root.after(0, lambda: self.lbl_cam_status.config(text="● LIVE (웹캠 연결됨)", fg="#22c55e"))
+                else:
+                    self.root.after(0, lambda: self.lbl_cam_status.config(text="✕ 웹캠 연결 실패", fg="#f87171"))
 
-                            style = win32gui.GetWindowLong(hwnd, -16)
-                            style &= ~0x00C00000
-                            style &= ~0x00040000
-                            style |= 0x40000000
-                            win32gui.SetWindowLong(hwnd, -16, style)
+            while self.cam_thread_running:
+                if self.cap and self.cap.isOpened():
+                    ret, frame = self.cap.read()
+                    if ret:
+                        self.current_webcam_frame = frame
+                    else:
+                        time.sleep(0.02)
+                else:
+                    time.sleep(0.1)
 
-                            win32gui.SetParent(hwnd, parent_hwnd)
-                            win32gui.MoveWindow(hwnd, 0, 0, 390, 230, True)
+        threading.Thread(target=_webcam_worker, daemon=True).start()
+        self.root.after(200, self.update_camera_canvas)
 
-                            self.embedded_window_hwnd = hwnd
-                            self.root.after(0, lambda: self.lbl_cam_status.config(text=f"● LIVE ({TARGET_CAM_NAME} 도킹 완료)", fg="#22c55e"))
-                            break
-                except Exception:
-                    pass
-                time.sleep(1.0)
+    def update_camera_canvas(self):
+        if self.current_webcam_frame is not None:
+            frame = self.current_webcam_frame.copy()
+            h, w = frame.shape[:2]
 
-        threading.Thread(target=_auto, daemon=True).start()
+            target_w, target_h = 390, 230
+            scale = min(target_w / w, target_h / h)
+            disp_w = max(1, int(w * scale))
+            disp_h = max(1, int(h * scale))
+
+            resized = cv2.resize(frame, (disp_w, disp_h))
+
+            # 검사 ROI 가이드 박스 표시
+            rx1 = int(disp_w * 0.20)
+            ry1 = int(disp_h * 0.15)
+            rx2 = int(disp_w * 0.85)
+            ry2 = int(disp_h * 0.85)
+            cv2.rectangle(resized, (rx1, ry1), (rx2, ry2), (0, 255, 255), 2)
+
+            rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(rgb)
+            self.cam_photo = ImageTk.PhotoImage(pil_img)
+
+            self.cam_canvas.delete("all")
+            x_offset = (target_w - disp_w) // 2
+            y_offset = (target_h - disp_h) // 2
+            self.cam_canvas.create_image(x_offset, y_offset, anchor="nw", image=self.cam_photo)
+
+        self.root.after(33, self.update_camera_canvas)
+
+    def on_closing(self):
+        self.cam_thread_running = False
+        if self.cap and self.cap.isOpened():
+            self.cap.release()
+        self.root.destroy()
 
     # ==========================================
-    # 비전 적재 방향 검사 (REAR: 은색 면 위로 노출 시 OK / 4번 사진 기준)
+    # FRONT 비전 적재 방향 검사 및 사진 자동 분기 저장
     # ==========================================
-    def inspect_rear_loading_direction(self, label_code):
-        if not (CV_AVAILABLE and pyautogui):
-            return True, "vision_module_missing"
+    def inspect_front_loading_direction(self, label_code):
+        if not CV_AVAILABLE or self.current_webcam_frame is None:
+            return True, "webcam_frame_missing"
 
         try:
-            self.root.update_idletasks()
-            x = self.cam_container.winfo_rootx()
-            y = self.cam_container.winfo_rooty()
-            w = self.cam_container.winfo_width()
-            h = self.cam_container.winfo_height()
+            frame = self.current_webcam_frame.copy()
+            h, w = frame.shape[:2]
 
-            if w < 50 or h < 50:
-                return True, "cam_frame_too_small"
+            # 1. 분기별/일자별/ITEM별 폴더 경로 생성
+            curr_model = self.current_model.get()
+            q_folder_name = get_quarter_folder_name(curr_model)
+            today_str = datetime.now().strftime("%Y-%m-%d")
 
-            shot = pyautogui.screenshot(region=(x, y, w, h))
-            frame = cv2.cvtColor(np.array(shot), cv2.COLOR_RGB2BGR)
+            target_save_dir = os.path.join(CAPTURE_BASE_DIR, q_folder_name, today_str)
+            os.makedirs(target_save_dir, exist_ok=True)
 
-            roi = frame[int(h*0.25):int(h*0.85), int(w*0.25):int(w*0.85)]
-            gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            safe_label_name = sanitize_filename(label_code)
+            photo_file_name = f"{safe_label_name}.jpg"
+            full_photo_path = os.path.join(target_save_dir, photo_file_name)
 
-            bright_pixels = np.sum(gray_roi > 160)
+            # 원본 고해상도 사진 영구 저장
+            cv2.imwrite(full_photo_path, frame)
+
+            # 2. 박스 및 부품 영역 ROI 설정
+            box_roi = frame[int(h * 0.15):int(h * 0.85), int(w * 0.20):int(w * 0.85)]
+            h_roi, w_roi = box_roi.shape[:2]
+
+            # 3. 파란색 박스 화살표 영역 검출 (박스 우측 상/하단 청색 채널 분석)
+            hsv = cv2.cvtColor(box_roi, cv2.COLOR_BGR2HSV)
+            blue_lower = np.array([100, 70, 70])
+            blue_upper = np.array([135, 255, 255])
+            blue_mask = cv2.inRange(hsv, blue_lower, blue_upper)
+
+            # 화살표 영역 (우측 테두리 상단 vs 하단 밀도 확인)
+            right_strip = blue_mask[:, int(w_roi * 0.75):]
+            top_blue = np.sum(right_strip[:int(h_roi * 0.5), :] > 0)
+            bottom_blue = np.sum(right_strip[int(h_roi * 0.5):, :] > 0)
+
+            # 4. 제품 적재 방향 분석 (은색 알루미늄 면 노출 비율)
+            gray_roi = cv2.cvtColor(box_roi, cv2.COLOR_BGR2GRAY)
+            bright_pixels = np.sum(gray_roi > 175)
             total_pixels = gray_roi.size
             bright_ratio = bright_pixels / total_pixels
 
-            now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_name = label_code.replace(";", "_")[:20]
-            capture_path = os.path.join(CAPTURE_DIR, f"{now_str}_{safe_name}.jpg")
-            cv2.imwrite(capture_path, frame)
+            # [OK 판정 조건]:
+            # 1) 박스 화살표가 OK 사진처럼 아래 방향 (하단 청색 대비 비율 정상)
+            # 2) 은색 가공면이 2번 사진(NG)처럼 과도하게 위로 드러나지 않음 (bright_ratio <= 0.12)
+            arrow_ok = (bottom_blue >= top_blue * 0.6)  # 화살표 아래 지향
+            part_dir_ok = (bright_ratio <= 0.12)        # 검은 완충 리브 정상 상단 노출
 
-            # REAR 기준: 은색 알루미늄 면이 위로 올라와 밝아야 OK (기준치 0.15 이상)
-            if bright_ratio < 0.15:
-                return False, f"bright_ratio={bright_ratio:.3f}"
-            return True, f"bright_ratio={bright_ratio:.3f}"
+            is_overall_ok = arrow_ok and part_dir_ok
+            detail = f"arrow={'OK' if arrow_ok else 'NG'}, bright_ratio={bright_ratio:.3f}"
+
+            return is_overall_ok, detail
 
         except Exception as e:
             return True, str(e)
 
     # ==========================================
-    # [핵심] 신규 MANAGER MODE 다이얼로그 (2개 버튼)
+    # MANAGER MODE (2버튼 팝업)
     # ==========================================
     def toggle_manager_mode(self):
         if self.active_popup or self.pallet_wait_popup:
@@ -469,7 +398,6 @@ class QRScanStationApp:
 
         tk.Label(dialog, text="[ 관리자 작업 선택 ]", font=("맑은 고딕", 12, "bold"), fg="#38bdf8", bg=BG_PANEL).pack(pady=(18, 12))
 
-        # [버튼 1] 중복 샘플 DMC 재스캔 버튼
         def act_rescan_dmc():
             self.is_manager_mode = True
             self.btn_manager.config(bg="#f59f00", fg="#000000", text=self.t("manager_btn_on"))
@@ -482,22 +410,20 @@ class QRScanStationApp:
                          font=("맑은 고딕", 10, "bold"), relief="flat", pady=8, cursor="hand2")
         btn1.pack(fill=tk.X, padx=30, pady=5)
 
-        # [버튼 2] 적재 방향 즉시 재판정 버튼
         def act_rejudge_orientation():
             dialog.destroy()
             self.rejudge_loading_direction_now()
 
-        btn2 = tk.Button(dialog, text="📷 박스 적재 방향 즉시 재판정 (홈캠)", command=act_rejudge_orientation,
+        btn2 = tk.Button(dialog, text="📷 박스 적재 방향 즉시 재판정 (웹캠)", command=act_rejudge_orientation,
                          bg="#1c3a24", fg="#8bd9a0", activebackground="#28a745", activeforeground="#ffffff",
                          font=("맑은 고딕", 10, "bold"), relief="flat", pady=8, cursor="hand2")
         btn2.pack(fill=tk.X, padx=30, pady=5)
 
     def rejudge_loading_direction_now(self):
-        """작업자가 방향을 바르게 고친 뒤 즉시 카메라를 다시 읽어 재판정"""
         curr_model = self.current_model.get()
         label_code = self.last_failed_label_code if self.last_failed_label_code else (self.pending_items[-1]["code"] if self.pending_items else "REJUDGE")
         
-        vision_ok, detail = self.inspect_rear_loading_direction(label_code)
+        vision_ok, detail = self.inspect_front_loading_direction(label_code)
 
         now = datetime.now()
         day_str = now.strftime("%Y-%m-%d")
@@ -509,7 +435,6 @@ class QRScanStationApp:
             self.set_status("OK", "#28a745", "#193322")
             messagebox.showinfo("판정 성공", f"적재 방향이 정상(OK)으로 확인되었습니다!\n({detail})", parent=self.root)
 
-            # 대기 중이던 10개 묶음 정상 완료 처리
             if self.last_failed_label_code and len(self.pending_items) == MAX_ITEMS_PER_BOX:
                 raw_code = self.last_failed_label_code
                 self.scanned_label_by_model[curr_model].add(raw_code)
@@ -536,7 +461,6 @@ class QRScanStationApp:
 
                 self.last_failed_label_code = ""
         else:
-            # 여전히 NG인 경우: NG 카운팅 +1 및 기록
             self.model_counts[curr_model]["ng"] += 1
             self.model_counts[curr_model]["total"] += 1
             self.save_model_counts()
@@ -635,7 +559,7 @@ class QRScanStationApp:
         header_frame = tk.Frame(self.root, bg=BG_MAIN, height=45)
         header_frame.pack(fill=tk.X, padx=20, pady=(10, 4))
 
-        tk.Label(header_frame, text="QR  SCAN  STATION  [REAR]", font=("Arial", 12, "bold"), 
+        tk.Label(header_frame, text="QR  SCAN  STATION  [FRONT]", font=("Arial", 12, "bold"), 
                  fg=TEXT_COLOR, bg=BG_MAIN).pack(side=tk.LEFT, padx=(0, 15))
 
         self.model_combo = ttk.Combobox(
@@ -776,19 +700,18 @@ class QRScanStationApp:
         )
         self.lbl_pending_status.pack(fill=tk.X, padx=20, pady=(0, 4))
 
-        # 좌측 하단 LDPlayer 9 도킹 전용 컨테이너
+        # 좌측 하단 웹캠 실시간 뷰어 프레임
         cam_panel = tk.Frame(left_panel, bg=BG_PANEL)
         cam_panel.pack(fill=tk.BOTH, expand=True, padx=20, pady=(2, 10))
 
         top_info = tk.Frame(cam_panel, bg=BG_PANEL)
         top_info.pack(fill=tk.X)
-        tk.Label(top_info, text=f"📷 실시간 홈캠 뷰어 [{TARGET_CAM_NAME}]", font=("맑은 고딕", 9, "bold"), fg="#38bdf8", bg=BG_PANEL).pack(side=tk.LEFT)
-        self.lbl_cam_status = tk.Label(top_info, text="○ 연결 대기 중...", font=("맑은 고딕", 8, "bold"), fg="#f87171", bg=BG_PANEL)
+        tk.Label(top_info, text="📷 실시간 웹캠 뷰어 [HP 320 FHD]", font=("맑은 고딕", 9, "bold"), fg="#38bdf8", bg=BG_PANEL).pack(side=tk.LEFT)
+        self.lbl_cam_status = tk.Label(top_info, text="○ 연결 확인 중...", font=("맑은 고딕", 8, "bold"), fg="#f87171", bg=BG_PANEL)
         self.lbl_cam_status.pack(side=tk.RIGHT)
 
-        self.cam_container = tk.Frame(cam_panel, width=390, height=230, bg="#0f172a", highlightthickness=1, highlightbackground="#334155")
-        self.cam_container.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
-        self.cam_container.pack_propagate(False)
+        self.cam_canvas = tk.Canvas(cam_panel, width=390, height=230, bg="#0f172a", highlightthickness=1, highlightbackground="#334155")
+        self.cam_canvas.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
 
         right_panel = tk.Frame(main_frame, bg=BG_MAIN)
         right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
@@ -817,7 +740,7 @@ class QRScanStationApp:
         self.tree.column("Label QR", width=220, anchor="w")
         self.tree.column("DMC", width=210, anchor="w")
         self.tree.column("JUDGMENT", width=75, anchor="center")
-        self.tree.column("Content", width=130, anchor="center")
+        self.tree.column("Content", width=140, anchor="center")
 
         tree_scroll = ttk.Scrollbar(right_panel, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=tree_scroll.set)
@@ -1015,7 +938,7 @@ class QRScanStationApp:
         self.tree_recode.column("Label QR", width=220, anchor="w")
         self.tree_recode.column("DMC", width=210, anchor="w")
         self.tree_recode.column("JUDGMENT", width=75, anchor="center")
-        self.tree_recode.column("Content", width=130, anchor="center")
+        self.tree_recode.column("Content", width=140, anchor="center")
 
         scroll_r = ttk.Scrollbar(recode_frame, orient=tk.VERTICAL, command=self.tree_recode.yview)
         self.tree_recode.configure(yscroll=scroll_r.set)
@@ -1307,7 +1230,10 @@ class QRScanStationApp:
                             self.scanned_pallet_by_model[model_name].add(pallet_val)
 
                         if seq_val == "Final HEADER":
-                            rows_to_insert.append((pallet_val, "", "", "", dmc_str, res_str, content_str))
+                            t_parts = str(dmc_time if dmc_time and dmc_time != "-" else box_time).split()
+                            d_val = t_parts[0] if len(t_parts) > 0 and "Done" not in dmc_str else ""
+                            tm_val = t_parts[1] if len(t_parts) > 1 and "Done" not in dmc_str else ""
+                            rows_to_insert.append((pallet_val, d_val, tm_val, "", dmc_str, res_str, content_str))
                             continue
 
                         if seq_val == "HEADER" or dmc_str.startswith("[박스 묶음 완료") or "Group" in dmc_str or "Pakiet" in dmc_str:
@@ -1407,7 +1333,9 @@ class QRScanStationApp:
         curr_model = self.current_model.get()
         target_code = MODEL_CONFIG[curr_model].upper()
 
-        # Pallet QR 스캔 처리
+        # ==========================================
+        # 1. Pallet QR 스캔 처리 (날짜 및 시간 표시 적용)
+        # ==========================================
         if self.is_pallet_qr(raw_code):
             upper_pallet_code = raw_code.upper()
 
@@ -1441,8 +1369,9 @@ class QRScanStationApp:
                 )
                 return
 
+            # 이전 팔레트 완료 처리 (FINISH는 시간 표시 불필요)
             if prev_pallet and curr_box_count >= 1:
-                self.direct_append_pallet_header(curr_model, prev_pallet, "Final HEADER", "[Pallet Grouping Done]", timestamp_full)
+                self.direct_append_pallet_header(curr_model, prev_pallet, "Final HEADER", "[Pallet Grouping Done]", timestamp_full, include_time=False)
                 self.tree.insert("", 0, values=(prev_pallet, "", "", "", "[Pallet Grouping Done]", "OK", ""), tags=("pallet_row",))
 
             self.pallet_state[curr_model]["current_pallet"] = upper_pallet_code
@@ -1451,15 +1380,15 @@ class QRScanStationApp:
             self.save_pallet_state()
             self.update_pallet_status_ui()
 
-            self.direct_append_pallet_header(curr_model, upper_pallet_code, "Final HEADER", "[Pallet Grouping Start]", timestamp_full)
-            self.tree.insert("", 0, values=(upper_pallet_code, "", "", "", "[Pallet Grouping Start]", "OK", ""), tags=("pallet_row",))
+            # [수정] 신규 Pallet 리딩 시 DAY, TIME 정확히 기록
+            self.direct_append_pallet_header(curr_model, upper_pallet_code, "Final HEADER", "[Pallet Grouping Start]", timestamp_full, include_time=True)
+            self.tree.insert("", 0, values=(upper_pallet_code, day_str, time_str, "", "[Pallet Grouping Start]", "OK", ""), tags=("pallet_row",))
 
             self.close_pallet_wait_popup()
             self.refresh_grouping_tab()
             self.set_status("OK", "#28a745", "#193322")
             return
 
-        # 일반 바코드 (단품 및 Label QR) 처리
         current_time = time.time()
         if raw_code == self.last_scanned_code and (current_time - self.last_scanned_time) < 2.0:
             return
@@ -1487,7 +1416,9 @@ class QRScanStationApp:
             self.open_sorting_popup(raw_code)
             return
 
-        # Label QR 스캔 (+ REAR 전용 비전 판정)
+        # ==========================================
+        # 2. Label QR 스캔 (+ 비전 방향 판정 및 분기/일자별 사진 저장)
+        # ==========================================
         if is_label_qr:
             curr_box_cnt = self.pallet_state[curr_model]["box_count"]
 
@@ -1525,10 +1456,9 @@ class QRScanStationApp:
                 )
                 return
 
-            # REAR 비전 적재 방향 검사 실행
-            vision_ok, detail = self.inspect_rear_loading_direction(raw_code)
+            # 비전 판정 및 사진 자동 저장
+            vision_ok, detail = self.inspect_front_loading_direction(raw_code)
             if not vision_ok:
-                # 적재 방향 불량 발생 -> NG 카운트 +1 및 기록
                 self.last_failed_label_code = raw_code
                 self.model_counts[curr_model]["ng"] += 1
                 self.model_counts[curr_model]["total"] += 1
@@ -1548,7 +1478,9 @@ class QRScanStationApp:
                 )
                 return
 
-        # 단품 QR
+        # ==========================================
+        # 3. 단품 QR 스캔 처리
+        # ==========================================
         if not is_label_qr:
             if len(self.pending_items) >= MAX_ITEMS_PER_BOX:
                 self.set_status("NG", "#dc3545", "#3a1c1f")
@@ -1561,7 +1493,7 @@ class QRScanStationApp:
 
             is_already_scanned = (clean_upper_code in self.scanned_history_by_model[curr_model])
 
-            # MANAGER MODE: 중복 샘플 재스캔 1회 통과
+            # MANAGER MODE: 중복 샘플 재스캔 1회 허용
             if self.is_manager_mode:
                 if not is_already_scanned:
                     self.set_status("NG", "#dc3545", "#3a1c1f")
@@ -1687,7 +1619,7 @@ class QRScanStationApp:
         self.scan_entry.focus_set()
 
     # ==========================================
-    # 6. 엑셀 8개 열 기록 로직
+    # 엑셀 I/O 로직 (Pallet QR 스캔 일시 반영)
     # ==========================================
     def open_or_init_workbook(self, filepath):
         unhide_file(filepath)
@@ -1746,7 +1678,7 @@ class QRScanStationApp:
 
         return wb, ws
 
-    def direct_append_pallet_header(self, model_name, pallet_code, seq_val, text_val, timestamp_full):
+    def direct_append_pallet_header(self, model_name, pallet_code, seq_val, text_val, timestamp_full, include_time=True):
         with self.file_lock:
             try:
                 filename = get_quarter_filename(model_name)
@@ -1761,7 +1693,10 @@ class QRScanStationApp:
                 done_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
 
                 fill_to_use = start_fill if "Start" in text_val else done_fill
-                row_data = [pallet_code, "-", "-", seq_val, text_val, timestamp_full, "OK", ""]
+                ts_record = timestamp_full if include_time else "-"
+                
+                # C열(Label 스캔일시) 및 F열(단품 스캔일시)에 날짜 표기 반영
+                row_data = [pallet_code, "-", ts_record, seq_val, text_val, ts_record, "OK", ""]
                 ws.append(row_data)
                 h_idx = ws.max_row
                 for col in range(1, 9):
@@ -1772,7 +1707,7 @@ class QRScanStationApp:
 
                 wb.save(filepath)
                 hide_file(filepath)
-            except Exception as e:
+            except Exception:
                 pass
 
     def direct_mark_sorting_ok(self, model_name, raw_code):
@@ -1812,7 +1747,7 @@ class QRScanStationApp:
                         if modified:
                             wb.save(f_path)
                     hide_file(f_path)
-            except Exception as e:
+            except Exception:
                 pass
 
     def direct_append_single_item(self, model_name, item):
@@ -1842,7 +1777,7 @@ class QRScanStationApp:
 
                 wb.save(filepath)
                 hide_file(filepath)
-            except Exception as e:
+            except Exception:
                 pass
 
     def direct_finalize_excel_group(self, model_name, pallet_code, box_qr, box_time, items, header_text, extra_content=""):
@@ -1879,11 +1814,10 @@ class QRScanStationApp:
 
                 wb.save(filepath)
                 hide_file(filepath)
-            except Exception as e:
+            except Exception:
                 pass
 
     def direct_record_ng_log(self, model_name, pallet_code, label_code, timestamp_full, extra_content):
-        """적재 방향 불량 발생 시 엑셀에 NG 이력 기록"""
         with self.file_lock:
             try:
                 filename = get_quarter_filename(model_name)
@@ -1909,7 +1843,7 @@ class QRScanStationApp:
 
                 wb.save(filepath)
                 hide_file(filepath)
-            except Exception as e:
+            except Exception:
                 pass
 
     def direct_handle_dmc_duplicate(self, model_name, raw_code, day_str, time_str, matched_label, dup_text, pallet_code):
