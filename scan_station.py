@@ -126,7 +126,7 @@ if os.name == 'nt':
         pass
 
 # ==========================================
-# 3. FRONT 전용 모델 설정 (정식 AD 코드)
+# 3. FRONT 전용 모델 설정
 # ==========================================
 MODEL_CONFIG = {
     'S-FRONT': 'MPL02916AD',
@@ -181,9 +181,6 @@ def get_quarter_filename(model_name, dt=None):
 def sanitize_filename(name):
     return re.sub(r'[\/:*?"<>|;]', '_', name).strip()
 
-# ==========================================
-# 4. 다국어 패키지 딕셔너리 (완벽 번역 지원)
-# ==========================================
 LANG_PACK = {
     "한국어": {
         "title": "Aluko_Front_QR Reader",
@@ -226,7 +223,7 @@ LANG_PACK = {
         "ng_pallet_dup_msg": "[NG: Pallet QR 중복 리딩 또는 박스 미완료]\n\n1) 최소 1개 이상의 박스를 완료한 후에만 팔레트 교체가 가능합니다.\n2) 이미 사용된 Pallet QR은 중복 등록할 수 없습니다.\n\n관리자 비밀번호를 입력하여 해제하세요.",
         "ng_label_dup_title": "⚠️ Label QR NG - 중복 스캔",
         "ng_label_dup_msg": "[Label QR NG: 이미 사용된 Label QR입니다]\n\n스캔 Label QR: {code}...\n이미 등록/포장 완료된 중복 라벨입니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
-        "ng_group_title": "⚠️ Grouping NG - 수량 불일치",
+        "ng_group_title": "⚠️️ Grouping NG - 수량 불일치",
         "ng_group_msg": "[Grouping NG: 단품 수량과 Label 포장 수량 불일치]\n\nLabel QR 지정 수량: {expected}개\n현재 스캔된 단품 수량: {current}개\n\n수량이 일치하지 않아 묶음을 진행할 수 없습니다.\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_limit_title": "⚠️ NG - Label QR 누락",
         "ng_limit_msg": "[NG 발생: Label QR 누락]\n\n단품이 이미 {max_cnt}개 모두 스캔되었습니다.\n11번째 단품은 기록되지 않습니다.\nLabel QR을 먼저 스캔하여 박스 묶음을 완료하십시오.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
@@ -275,7 +272,7 @@ LANG_PACK = {
         "save_btn": "💾 Save (Excel)",
         "box_complete": "[Box Grouping Done: {count} pcs]",
         "dup_scan_tag": "[Duplicate Scan]",
-        "sorting_title": "⚠️ Sorting Required Warning",
+        "sorting_title": "⚠️️ Sorting Required Warning",
         "sorting_msg": "[Notice: Sorting Item]\n\nDMC Code: {code}\n\nThis item is registered on the Sorting target list.\nIsolate the barcode and press [Enter].",
         "ng_model_title": "⚠️ NG - Model Mismatch",
         "ng_model_msg": "[NG: Selected model and barcode code do not match]\n\nCurrent Model: {model} ({target})\nScanned Code: {code}\n\nEnter 6-digit admin password to unlock.",
@@ -1697,6 +1694,17 @@ class QRScanStationApp:
                 )
                 return
 
+            # [요청 반영] 대기 중인 단품 중 NG 판정(중복 스캔 등)이 하나라도 포함되어 있는지 엄격 검사
+            has_ng_item = any(item.get("result") == "NG" for item in self.pending_items)
+            if has_ng_item:
+                self.set_status("NG BLOCK", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text="🚫 Grouping 차단 - NG 자재 포함",
+                    msg="[그룹핑 오류: 미그룹 스캔 내역에 NG 항목이 포함되어 있습니다]\n\n중복 스캔 등으로 인해 NG 처리된 자재가 남아있으면 Box 묶음을 진행할 수 없습니다.\n[MANAGER MODE]를 통해 해당 자재를 정상 처리한 후 다시 시도하세요.",
+                    header_bg="#3a1c1f", header_fg="#ff6b6b"
+                )
+                return
+
             self.capture_webcam_photo(raw_code)
 
             self.scanned_label_by_model[curr_model].add(raw_code)
@@ -1780,6 +1788,11 @@ class QRScanStationApp:
                     cur_p = self.pallet_state[curr_model]["current_pallet"]
                     dup_text = self.t("dup_scan_tag")
                     self.tree.insert("", 0, values=(cur_p, day_str, time_str, "-", raw_code, "NG", dup_text), tags=("ng_row",))
+
+                    # [요청 반영] 대기 목록(pending_items) 내 동일 바코드 항목도 'NG' 상태로 정확히 마킹
+                    for p_item in self.pending_items:
+                        if p_item["code"].strip().upper() == clean_upper_code:
+                            p_item["result"] = "NG"
 
                     matched_label_qr = None
                     for item_id in self.tree.get_children():
