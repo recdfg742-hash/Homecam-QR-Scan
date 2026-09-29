@@ -31,7 +31,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 # 1. 파일 위변조·무단 복사·이동·삭제 방지 보호 가드
 # ==========================================
 PROTECTION_PASSWORD = 'Aluko000'
-INTEGRITY_HASH_FILE = "Aluko_Rear_QR_Reader.lock"
+INTEGRITY_HASH_FILE = "Aluko_Front_QR_Reader.lock"
 
 def check_file_integrity_and_lock():
     if not getattr(sys, 'frozen', False):
@@ -115,22 +115,22 @@ SINGLE_INSTANCE_MUTEX = None
 if os.name == 'nt':
     try:
         kernel32 = ctypes.windll.kernel32
-        MUTEX_NAME = "Aluko_Rear_QR_Reader_Mutex"
+        MUTEX_NAME = "Aluko_Front_QR_Reader_Mutex"
         SINGLE_INSTANCE_MUTEX = kernel32.CreateMutexW(None, False, MUTEX_NAME)
         if kernel32.GetLastError() == 183:
             root_temp = tk.Tk()
             root_temp.withdraw()
-            messagebox.showwarning("중복 실행 경고", "이미 Aluko_Rear_QR Reader 프로그램이 실행 중입니다.")
+            messagebox.showwarning("중복 실행 경고", "이미 Aluko_Front_QR Reader 프로그램이 실행 중입니다.")
             sys.exit(0)
     except Exception:
         pass
 
 # ==========================================
-# 3. REAR 전용 모델 설정 (정식 AD 코드)
+# 3. FRONT 전용 모델 설정 (정식 AD 코드)
 # ==========================================
 MODEL_CONFIG = {
-    'S-REAR': 'MPL02914AD',
-    'R-REAR': 'MPL02925AD'
+    'S-FRONT': 'MPL02916AD',
+    'R-FRONT': 'MPL02926AD'
 }
 
 CODE_TO_MODEL = {v: k for k, v in MODEL_CONFIG.items()}
@@ -144,9 +144,9 @@ def get_base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 BASE_DIR = get_base_dir()
-COUNT_FILE = os.path.join(BASE_DIR, "counts_rear.json")
-STATE_FILE = os.path.join(BASE_DIR, "pallet_state_rear.json")
-CAPTURE_BASE_DIR = os.path.join(BASE_DIR, "captures_rear")
+COUNT_FILE = os.path.join(BASE_DIR, "counts_front.json")
+STATE_FILE = os.path.join(BASE_DIR, "pallet_state_front.json")
+CAPTURE_BASE_DIR = os.path.join(BASE_DIR, "captures_front")
 os.makedirs(CAPTURE_BASE_DIR, exist_ok=True)
 
 FILE_ATTRIBUTE_NORMAL = 0x80
@@ -186,7 +186,7 @@ def sanitize_filename(name):
 # ==========================================
 LANG_PACK = {
     "한국어": {
-        "title": "Aluko_Rear_QR Reader",
+        "title": "Aluko_Front_QR Reader",
         "pw_setting": "⚙ 비밀번호 설정",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -245,7 +245,7 @@ LANG_PACK = {
         "pw_err": "비밀번호가 올바르지 않습니다."
     },
     "English": {
-        "title": "Aluko_Rear_QR Reader",
+        "title": "Aluko_Front_QR Reader",
         "pw_setting": "⚙ Password Setting",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -275,7 +275,7 @@ LANG_PACK = {
         "save_btn": "💾 Save (Excel)",
         "box_complete": "[Box Grouping Done: {count} pcs]",
         "dup_scan_tag": "[Duplicate Scan]",
-        "sorting_title": "⚠️️ Sorting Required Warning",
+        "sorting_title": "⚠️ Sorting Required Warning",
         "sorting_msg": "[Notice: Sorting Item]\n\nDMC Code: {code}\n\nThis item is registered on the Sorting target list.\nIsolate the barcode and press [Enter].",
         "ng_model_title": "⚠️ NG - Model Mismatch",
         "ng_model_msg": "[NG: Selected model and barcode code do not match]\n\nCurrent Model: {model} ({target})\nScanned Code: {code}\n\nEnter 6-digit admin password to unlock.",
@@ -304,7 +304,7 @@ LANG_PACK = {
         "pw_err": "Incorrect password."
     },
     "Polski": {
-        "title": "Aluko_Rear_QR Reader",
+        "title": "Aluko_Front_QR Reader",
         "pw_setting": "⚙ Ustawienia hasła",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -375,13 +375,13 @@ ACCENT_YELLOW = "#f59f00"
 class QRScanStationApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Aluko_Rear_QR Reader")
+        self.root.title("Aluko_Front_QR Reader")
         self.root.geometry("1440x880")
         self.root.minsize(1280, 780)
         self.root.configure(bg=BG_MAIN)
 
         self.current_lang = tk.StringVar(value="한국어")
-        self.current_model = tk.StringVar(value='S-REAR')
+        self.current_model = tk.StringVar(value='S-FRONT')
         self.admin_password = DEFAULT_PASSWORD
         self.model_session_id = 0
 
@@ -438,9 +438,6 @@ class QRScanStationApp:
                     time.sleep(0.08)
         threading.Thread(target=_beep, daemon=True).start()
 
-    # ==========================================
-    # [핵심 보완] USB 웹캠 자동 재연결(Hot-Plug Recovery) 스트리밍
-    # ==========================================
     def find_and_open_camera(self):
         search_order = [1, 2, 3, 0]
         for idx in search_order:
@@ -482,7 +479,6 @@ class QRScanStationApp:
                     if ret and frame is not None:
                         self.current_webcam_frame = frame
                     else:
-                        # 연결이 도중 끊긴 경우 해제 후 재연결 루프 진입
                         if self.cap:
                             self.cap.release()
                         self.cap = None
@@ -548,7 +544,7 @@ class QRScanStationApp:
 
         selected_items = self.tree.selection()
         if not selected_items:
-            messagebox.showwarning("선택 없음", "삭제할 기록 행을 [REAR 기록] 테이블에서 마우스로 먼저 선택해 주세요.", parent=self.root)
+            messagebox.showwarning("선택 없음", "삭제할 기록 행을 [FRONT 기록] 테이블에서 마우스로 먼저 선택해 주세요.", parent=self.root)
             self.scan_entry.focus_set()
             return
 
@@ -803,7 +799,7 @@ class QRScanStationApp:
         header_frame = tk.Frame(self.root, bg=BG_MAIN, height=45)
         header_frame.pack(fill=tk.X, padx=20, pady=(10, 4))
 
-        tk.Label(header_frame, text="Aluko_Rear_QR Reader", font=("Arial", 12, "bold"), 
+        tk.Label(header_frame, text="Aluko_Front_QR Reader", font=("Arial", 12, "bold"), 
                  fg=TEXT_COLOR, bg=BG_MAIN).pack(side=tk.LEFT, padx=(0, 15))
 
         self.model_combo = ttk.Combobox(
@@ -950,7 +946,6 @@ class QRScanStationApp:
         )
         self.lbl_pending_status.pack(fill=tk.X, padx=20, pady=(0, 4))
 
-        # 실시간 웹캠 뷰어 창
         cam_panel = tk.Frame(left_panel, bg=BG_PANEL)
         cam_panel.pack(fill=tk.BOTH, expand=True, padx=20, pady=(2, 10))
 
@@ -1702,7 +1697,6 @@ class QRScanStationApp:
                 )
                 return
 
-            # Label QR 스캔 시점 웹캠 사진 저장
             self.capture_webcam_photo(raw_code)
 
             self.scanned_label_by_model[curr_model].add(raw_code)
