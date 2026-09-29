@@ -31,11 +31,11 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 # 1. 파일 위변조·무단 복사·이동·삭제 방지 보호 가드
 # ==========================================
 PROTECTION_PASSWORD = 'Aluko000'
-INTEGRITY_HASH_FILE = "Aluko_Front_QR_Reader.lock"
+INTEGRITY_HASH_FILE = "Aluko_Rear_QR_Reader.lock"
 
 def check_file_integrity_and_lock():
     if not getattr(sys, 'frozen', False):
-        return  # 파이썬 스크립트 실행 상태에서는 패스
+        return
 
     current_exe_path = sys.executable
     exe_dir = os.path.dirname(current_exe_path)
@@ -115,22 +115,22 @@ SINGLE_INSTANCE_MUTEX = None
 if os.name == 'nt':
     try:
         kernel32 = ctypes.windll.kernel32
-        MUTEX_NAME = "Aluko_Front_QR_Reader_Mutex"
+        MUTEX_NAME = "Aluko_Rear_QR_Reader_Mutex"
         SINGLE_INSTANCE_MUTEX = kernel32.CreateMutexW(None, False, MUTEX_NAME)
         if kernel32.GetLastError() == 183:
             root_temp = tk.Tk()
             root_temp.withdraw()
-            messagebox.showwarning("중복 실행 경고", "이미 Aluko_Front_QR Reader 프로그램이 실행 중입니다.")
+            messagebox.showwarning("중복 실행 경고", "이미 Aluko_Rear_QR Reader 프로그램이 실행 중입니다.")
             sys.exit(0)
     except Exception:
         pass
 
 # ==========================================
-# 3. FRONT 전용 모델 설정 (정식 AD 코드)
+# 3. REAR 전용 모델 설정 (정식 AD 코드)
 # ==========================================
 MODEL_CONFIG = {
-    'S-FRONT': 'MPL02916AD',
-    'R-FRONT': 'MPL02926AD'
+    'S-REAR': 'MPL02914AD',
+    'R-REAR': 'MPL02925AD'
 }
 
 CODE_TO_MODEL = {v: k for k, v in MODEL_CONFIG.items()}
@@ -144,9 +144,9 @@ def get_base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 BASE_DIR = get_base_dir()
-COUNT_FILE = os.path.join(BASE_DIR, "counts_front.json")
-STATE_FILE = os.path.join(BASE_DIR, "pallet_state_front.json")
-CAPTURE_BASE_DIR = os.path.join(BASE_DIR, "captures_front")
+COUNT_FILE = os.path.join(BASE_DIR, "counts_rear.json")
+STATE_FILE = os.path.join(BASE_DIR, "pallet_state_rear.json")
+CAPTURE_BASE_DIR = os.path.join(BASE_DIR, "captures_rear")
 os.makedirs(CAPTURE_BASE_DIR, exist_ok=True)
 
 FILE_ATTRIBUTE_NORMAL = 0x80
@@ -181,25 +181,28 @@ def get_quarter_filename(model_name, dt=None):
 def sanitize_filename(name):
     return re.sub(r'[\/:*?"<>|;]', '_', name).strip()
 
+# ==========================================
+# 4. 다국어 패키지 딕셔너리 (완벽 번역 지원)
+# ==========================================
 LANG_PACK = {
     "한국어": {
-        "title": "Aluko_Front_QR Reader",
+        "title": "Aluko_Rear_QR Reader",
         "pw_setting": "⚙ 비밀번호 설정",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
         "tab_recode": "  Re-code  ",
-        "model_label": "모델",
-        "code_label": "인식코드",
+        "model_label": "모델:",
+        "code_label": "인식코드:",
         "last_scan": "마지막 스캔",
         "input_guide": "바코드 스캔 입력 (어느 화면에서나 스캔 가능)",
         "reset_btn": "RESET (카운터 초기화)",
         "manager_btn": "MANAGER MODE",
         "manager_btn_on": "MANAGER [DMC 재스캔 대기]",
         "pending_status": "미그룹 스캔 {count}건 – Label QR 대기 중",
-        "pallet_status": "현재 팔레트: {pallet} ({boxes}/{max_b} 박스)",
+        "pallet_status": "현재 Pallet: {pallet} ({boxes}/{max_b} 박스)",
         "record_header": "{model} 기록",
         "grouping_header": "{model} Pallet - Label Grouping 현황",
-        "th_pallet": "Pallet Label QR",
+        "th_pallet": "Pallet",
         "th_box_seq": "박스 번호",
         "th_day": "DAY",
         "th_time": "TIME",
@@ -240,6 +243,124 @@ LANG_PACK = {
         "unlock_btn": "확인 및 잠금 해제",
         "confirm_btn": "확인 (Enter)",
         "pw_err": "비밀번호가 올바르지 않습니다."
+    },
+    "English": {
+        "title": "Aluko_Rear_QR Reader",
+        "pw_setting": "⚙ Password Setting",
+        "tab_scan": "  QR Scan  ",
+        "tab_grouping": "  Grouping  ",
+        "tab_recode": "  Re-code  ",
+        "model_label": "Model:",
+        "code_label": "Code:",
+        "last_scan": "Last Scan",
+        "input_guide": "Barcode scan input (Scannable anywhere)",
+        "reset_btn": "RESET (Clear Counter)",
+        "manager_btn": "MANAGER MODE",
+        "manager_btn_on": "MANAGER [Waiting Rescan]",
+        "pending_status": "{count} unbundled items – Waiting for Label QR",
+        "pallet_status": "Current Pallet: {pallet} ({boxes}/{max_b} Boxes)",
+        "record_header": "{model} Records",
+        "grouping_header": "{model} Pallet - Label Grouping Status",
+        "th_pallet": "Pallet",
+        "th_box_seq": "Box Seq",
+        "th_day": "DAY",
+        "th_time": "TIME",
+        "th_label": "Label QR",
+        "th_dmc": "DMC",
+        "th_judgment": "JUDGMENT",
+        "th_content": "Content",
+        "filter_day": "Search Date:",
+        "filter_time": "Time Range:",
+        "search_btn": "🔍 Search",
+        "save_btn": "💾 Save (Excel)",
+        "box_complete": "[Box Grouping Done: {count} pcs]",
+        "dup_scan_tag": "[Duplicate Scan]",
+        "sorting_title": "⚠️️ Sorting Required Warning",
+        "sorting_msg": "[Notice: Sorting Item]\n\nDMC Code: {code}\n\nThis item is registered on the Sorting target list.\nIsolate the barcode and press [Enter].",
+        "ng_model_title": "⚠️ NG - Model Mismatch",
+        "ng_model_msg": "[NG: Selected model and barcode code do not match]\n\nCurrent Model: {model} ({target})\nScanned Code: {code}\n\nEnter 6-digit admin password to unlock.",
+        "ng_pallet_model_title": "⚠️ NG - Pallet QR Model Mismatch",
+        "ng_pallet_model_msg": "[NG: Pallet QR model code does not match]\n\nCurrent Model: {model} ({target})\nScanned Pallet QR: {code}\n\nPrepare correct Pallet QR and unlock with admin password.",
+        "ng_pallet_dup_title": "🚫 NG - Pallet QR Duplicate/Sequence Error",
+        "ng_pallet_dup_msg": "[NG: Pallet QR duplicate reading or incomplete box]\n\n1) Pallet change is allowed only after completing at least 1 box.\n2) Used Pallet QR cannot be registered again.\n\nEnter admin password to unlock.",
+        "ng_label_dup_title": "⚠️ Label QR NG - Duplicate Scan",
+        "ng_label_dup_msg": "[Label QR NG: Already used Label QR]\n\nScanned Label QR: {code}...\nAlready registered/packed duplicate label.\n\nEnter 6-digit admin password to unlock.",
+        "ng_group_title": "⚠️ Grouping NG - Quantity Mismatch",
+        "ng_group_msg": "[Grouping NG: Item qty and Label packed qty mismatch]\n\nLabel QR Specified Qty: {expected}\nCurrent Scanned Item Qty: {current}\n\nQuantities do not match. Cannot proceed grouping.\nEnter 6-digit admin password to unlock.",
+        "ng_limit_title": "⚠️ NG - Label QR Missing",
+        "ng_limit_msg": "[NG Occurred: Label QR Missing]\n\nAll {max_cnt} items have already been scanned.\nThe 11th item will not be recorded.\nScan Label QR first to complete box grouping.\n\nEnter 6-digit admin password to unlock.",
+        "ng_mgr_err_title": "⚠️ NG - Manager Mode Error",
+        "ng_mgr_err_msg": "[NG: New barcodes must be scanned in general mode]\n\nScanned Barcode: {code}\nOnly already registered barcodes can be re-entered in duplicate rescan mode.\n\nEnter 6-digit admin password to unlock.",
+        "ng_dup_title": "🚫 QR NG - Duplicate Barcode Detected",
+        "ng_dup_msg": "[QR NG Occurred: Already scanned barcode]\n\nScanned Barcode: {code}\nThis item and connected box header have been changed to NG.\n\nEnter 6-digit admin password to unlock.",
+        "ng_pallet_mid_title": "⚠️ NG - Pallet Reading Timing Error",
+        "ng_pallet_mid_msg": "[NG: Cannot read Pallet QR during item scanning]\n\nCurrently {count} items are being scanned.\nComplete 10 items and Label QR scan before reading Pallet QR.",
+        "ng_pallet_limit_title": "🚫 NG - Pallet QR Missing (Exceeded 13 Boxes)",
+        "ng_pallet_limit_msg": "[NG: Pallet QR Reading Missing]\n\n12 boxes have already been filled.\nCannot proceed to 13th+ box without reading new Pallet QR.\n\nEnter admin password to unlock.",
+        "pallet_popup_title": "Pallet QR Scan Waiting",
+        "pallet_popup_msg": "12 box packings are completed.\nPlease scan a new Pallet QR.",
+        "unlock_btn": "Confirm & Unlock",
+        "confirm_btn": "Confirm (Enter)",
+        "pw_err": "Incorrect password."
+    },
+    "Polski": {
+        "title": "Aluko_Rear_QR Reader",
+        "pw_setting": "⚙ Ustawienia hasła",
+        "tab_scan": "  QR Scan  ",
+        "tab_grouping": "  Grouping  ",
+        "tab_recode": "  Re-code  ",
+        "model_label": "Model:",
+        "code_label": "Kod:",
+        "last_scan": "Ostatni skan",
+        "input_guide": "Wprowadzenie skanu kodu kreskowego",
+        "reset_btn": "RESET (Wyczyść licznik)",
+        "manager_btn": "MANAGER MODE",
+        "manager_btn_on": "MANAGER [Oczekiwanie]",
+        "pending_status": "{count} niesparowanych sztuk – Oczekiwanie na Label QR",
+        "pallet_status": "Aktualna Palleta: {pallet} ({boxes}/{max_b} Boxów)",
+        "record_header": "Zapisy {model}",
+        "grouping_header": "Status grupowania {model} Pallet - Label",
+        "th_pallet": "Pallet",
+        "th_box_seq": "Seq Box",
+        "th_day": "DAY",
+        "th_time": "TIME",
+        "th_label": "Label QR",
+        "th_dmc": "DMC",
+        "th_judgment": "JUDGMENT",
+        "th_content": "Content",
+        "filter_day": "Data:",
+        "filter_time": "Zakres czasu:",
+        "search_btn": "🔍 Szukaj",
+        "save_btn": "💾 Zapisz (Excel)",
+        "box_complete": "[Box Grouping Done: {count} pcs]",
+        "dup_scan_tag": "[Duplikat skanu]",
+        "sorting_title": "⚠️ Ostrzeżenie - Wymagane sortowanie",
+        "sorting_msg": "[Uwaga: Przedmiot do sortowania]\n\nDMC Code: {code}\n\nTen przedmiot znajduje się na liście docelowej sortowania.\nOdizoluj kod kreskowy i naciśnij [Enter].",
+        "ng_model_title": "⚠️ NG - Niezgodność modelu",
+        "ng_model_msg": "[NG: Wybrany model i kod kreskowy nie pasują do siebie]\n\nObecny Model: {model} ({target})\nZeskanowany Kod: {code}\n\nWprowadź 6-cyfrowe hasło administratora.",
+        "ng_pallet_model_title": "⚠️ NG - Niezgodność modelu Pallet QR",
+        "ng_pallet_model_msg": "[NG: Kod modelu Pallet QR nie pasuje]\n\nObecny Model: {model} ({target})\nZeskanowana Palleta: {code}\n\nPrzygotuj właściwy Pallet QR i odblokuj hasłem.",
+        "ng_pallet_dup_title": "🚫 NG - Duplikat Pallet QR / Błąd kolejności",
+        "ng_pallet_dup_msg": "[NG: Zduplikowany odczyt Pallet QR lub niedokończony box]\n\n1) Zmiana palety dozwolona po ukończeniu min. 1 boxu.\n2) Użyty Pallet QR nie może być zarejestrowany ponownie.\n\nWprowadź hasło administratora.",
+        "ng_label_dup_title": "⚠️ Label QR NG - Duplikat skanu",
+        "ng_label_dup_msg": "[Label QR NG: Już użyty Label QR]\n\nZeskanowany Label QR: {code}...\nEtykieta została już zarejestrowana/spakowana.\n\nWprowadź hasło administratora.",
+        "ng_group_title": "⚠️ Grouping NG - Niezgodność ilości",
+        "ng_group_msg": "[Grouping NG: Niezgodność ilości sztuk i etykiety]\n\nIlość z Label QR: {expected}\nObecna ilość sztuk: {current}\n\nIlości się nie zgadzają.\nWprowadź hasło administratora.",
+        "ng_limit_title": "⚠️ NG - Brak Label QR",
+        "ng_limit_msg": "[Wystąpił NG: Brak Label QR]\n\nWszystkie {max_cnt} sztuk zostało już zeskanowanych.\n11. sztuka nie zostanie zapisana.\nZeskanuj najpierw Label QR.\n\nWprowadź hasło administratora.",
+        "ng_mgr_err_title": "⚠️ NG - Błąd trybu menedżera",
+        "ng_mgr_err_msg": "[NG: Nowe kody muszą być skanowane w trybie ogólnym]\n\nZeskanowany kod: {code}\n\nWprowadź hasło administratora.",
+        "ng_dup_title": "🚫 QR NG - Wykryto zduplikowany kod",
+        "ng_dup_msg": "[QR NG: Ten kod został już zeskanowany]\n\nZeskanowany kod: {code}\nTen przedmiot i połączony nagłówek zostały zmienione na NG.\n\nWprowadź hasło administratora.",
+        "ng_pallet_mid_title": "⚠️ NG - Błąd momentu odczytu palety",
+        "ng_pallet_mid_msg": "[NG: Nie można czytać Pallet QR podczas skanowania sztuk]\n\nObecnie skanowanych jest {count} sztuk.\nZakończ 10 sztuk i Label QR przed odczytem palety.",
+        "ng_pallet_limit_title": "🚫 NG - Brak Pallet QR (Przekroczono 12 boxów)",
+        "ng_pallet_limit_msg": "[NG: Brak odczytu Pallet QR]\n\nWypełniono już 12 boxów.\nNie można przejść do 13. boxu bez odczytu nowego Pallet QR.\n\nWprowadź hasło administratora.",
+        "pallet_popup_title": "Oczekiwanie na Pallet QR",
+        "pallet_popup_msg": "Zakończono pakowanie 12 boxów.\nZeskanuj nowy Pallet QR.",
+        "unlock_btn": "Potwierdź i odblokuj",
+        "confirm_btn": "Potwierdź (Enter)",
+        "pw_err": "Nieprawidłowe hasło."
     }
 }
 
@@ -254,13 +375,13 @@ ACCENT_YELLOW = "#f59f00"
 class QRScanStationApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Aluko_Front_QR Reader")
+        self.root.title("Aluko_Rear_QR Reader")
         self.root.geometry("1440x880")
         self.root.minsize(1280, 780)
         self.root.configure(bg=BG_MAIN)
 
         self.current_lang = tk.StringVar(value="한국어")
-        self.current_model = tk.StringVar(value='S-FRONT')
+        self.current_model = tk.StringVar(value='S-REAR')
         self.admin_password = DEFAULT_PASSWORD
         self.model_session_id = 0
 
@@ -317,6 +438,9 @@ class QRScanStationApp:
                     time.sleep(0.08)
         threading.Thread(target=_beep, daemon=True).start()
 
+    # ==========================================
+    # [핵심 보완] USB 웹캠 자동 재연결(Hot-Plug Recovery) 스트리밍
+    # ==========================================
     def find_and_open_camera(self):
         search_order = [1, 2, 3, 0]
         for idx in search_order:
@@ -336,29 +460,35 @@ class QRScanStationApp:
 
     def start_usb_webcam_stream(self):
         def _webcam_worker():
-            if CV_AVAILABLE:
-                self.cap = self.find_and_open_camera()
-
-                if self.cap and self.cap.isOpened():
-                    self.is_camera_ready = True
-                    cam_type_str = f"외장 USB 웹캠 (CAM {self.cam_index_used})" if self.cam_index_used > 0 else "기본 웹캠 (CAM 0)"
-                    self.root.after(0, lambda: self.lbl_cam_status.config(
-                        text=f"● LIVE ({cam_type_str})", fg="#22c55e"
-                    ))
-                else:
-                    self.root.after(0, lambda: self.lbl_cam_status.config(
-                        text="✕ 웹캠 연결 실패 (USB 확인)", fg="#f87171"
-                    ))
-
             while self.cam_thread_running:
-                if self.cap and self.cap.isOpened():
+                if CV_AVAILABLE:
+                    if self.cap is None or not self.cap.isOpened():
+                        self.cap = self.find_and_open_camera()
+                        if self.cap and self.cap.isOpened():
+                            self.is_camera_ready = True
+                            cam_type_str = f"외장 USB 웹캠 (CAM {self.cam_index_used})" if self.cam_index_used > 0 else "기본 웹캠 (CAM 0)"
+                            self.root.after(0, lambda: self.lbl_cam_status.config(
+                                text=f"● LIVE ({cam_type_str})", fg="#22c55e"
+                            ))
+                        else:
+                            self.is_camera_ready = False
+                            self.root.after(0, lambda: self.lbl_cam_status.config(
+                                text="✕ 웹캠 연결 끊김 (재연결 시도 중...)", fg="#f87171"
+                            ))
+                            time.sleep(1.0)
+                            continue
+
                     ret, frame = self.cap.read()
-                    if ret:
+                    if ret and frame is not None:
                         self.current_webcam_frame = frame
                     else:
-                        time.sleep(0.02)
+                        # 연결이 도중 끊긴 경우 해제 후 재연결 루프 진입
+                        if self.cap:
+                            self.cap.release()
+                        self.cap = None
+                        self.is_camera_ready = False
                 else:
-                    time.sleep(0.1)
+                    time.sleep(0.5)
 
         threading.Thread(target=_webcam_worker, daemon=True).start()
         self.root.after(200, self.update_camera_canvas)
@@ -418,7 +548,7 @@ class QRScanStationApp:
 
         selected_items = self.tree.selection()
         if not selected_items:
-            messagebox.showwarning("선택 없음", "삭제할 기록 행을 [FRONT 기록] 테이블에서 마우스로 먼저 선택해 주세요.", parent=self.root)
+            messagebox.showwarning("선택 없음", "삭제할 기록 행을 [REAR 기록] 테이블에서 마우스로 먼저 선택해 주세요.", parent=self.root)
             self.scan_entry.focus_set()
             return
 
@@ -673,7 +803,7 @@ class QRScanStationApp:
         header_frame = tk.Frame(self.root, bg=BG_MAIN, height=45)
         header_frame.pack(fill=tk.X, padx=20, pady=(10, 4))
 
-        tk.Label(header_frame, text="Aluko_Front_QR Reader", font=("Arial", 12, "bold"), 
+        tk.Label(header_frame, text="Aluko_Rear_QR Reader", font=("Arial", 12, "bold"), 
                  fg=TEXT_COLOR, bg=BG_MAIN).pack(side=tk.LEFT, padx=(0, 15))
 
         self.model_combo = ttk.Combobox(
@@ -810,7 +940,7 @@ class QRScanStationApp:
         self.btn_manager.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(3, 0))
 
         self.lbl_pallet_status = tk.Label(
-            left_panel, text="현재 팔레트: - (0/12 박스)",
+            left_panel, text="현재 Pallet: - (0/12 박스)",
             font=("맑은 고딕", 9, "bold"), fg="#38bdf8", bg=BG_PANEL, anchor="w"
         )
         self.lbl_pallet_status.pack(fill=tk.X, padx=20, pady=(2, 2))
@@ -820,6 +950,7 @@ class QRScanStationApp:
         )
         self.lbl_pending_status.pack(fill=tk.X, padx=20, pady=(0, 4))
 
+        # 실시간 웹캠 뷰어 창
         cam_panel = tk.Frame(left_panel, bg=BG_PANEL)
         cam_panel.pack(fill=tk.BOTH, expand=True, padx=20, pady=(2, 10))
 
@@ -1065,6 +1196,7 @@ class QRScanStationApp:
         scroll_r.pack(side=tk.RIGHT, fill=tk.Y)
 
     def on_language_changed(self, event=None):
+        self.root.title(self.t("title"))
         self.notebook.tab(0, text=self.t("tab_scan"))
         self.notebook.tab(1, text=self.t("tab_grouping"))
         self.notebook.tab(2, text=self.t("tab_recode"))
@@ -1570,6 +1702,7 @@ class QRScanStationApp:
                 )
                 return
 
+            # Label QR 스캔 시점 웹캠 사진 저장
             self.capture_webcam_photo(raw_code)
 
             self.scanned_label_by_model[curr_model].add(raw_code)
