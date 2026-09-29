@@ -5,7 +5,6 @@ import json
 import time
 import glob
 import ctypes
-import hashlib
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -28,109 +27,28 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # ==========================================
-# 1. 파일 위변조·무단 복사·이동·삭제 방지 보호 가드
-# ==========================================
-PROTECTION_PASSWORD = 'Aluko000'
-INTEGRITY_HASH_FILE = "Aluko_Front_QR_Reader.lock"
-
-def check_file_integrity_and_lock():
-    if not getattr(sys, 'frozen', False):
-        return
-
-    current_exe_path = sys.executable
-    exe_dir = os.path.dirname(current_exe_path)
-    hash_record_path = os.path.join(exe_dir, INTEGRITY_HASH_FILE)
-
-    try:
-        with open(current_exe_path, "rb") as f:
-            file_bytes = f.read()
-            current_hash = hashlib.sha256(file_bytes).hexdigest()
-    except Exception:
-        return
-
-    if os.path.exists(hash_record_path):
-        try:
-            with open(hash_record_path, "r", encoding="utf-8") as rf:
-                saved_hash = rf.read().strip()
-            
-            if saved_hash != current_hash:
-                if not prompt_protection_unlock("프로그램 무단 복사 또는 이동이 감지되었습니다."):
-                    sys.exit(0)
-        except Exception:
-            pass
-    else:
-        try:
-            with open(hash_record_path, "w", encoding="utf-8") as wf:
-                wf.write(current_hash)
-            if os.name == 'nt':
-                ctypes.windll.kernel32.SetFileAttributesW(str(hash_record_path), 0x02)
-        except Exception:
-            pass
-
-def prompt_protection_unlock(reason_msg):
-    auth_root = tk.Tk()
-    auth_root.title("Aluko Security Protection")
-    auth_root.geometry("360x190")
-    auth_root.configure(bg="#1a1f26")
-    auth_root.resizable(False, False)
-
-    auth_root.update_idletasks()
-    x = (auth_root.winfo_screenwidth() - 360) // 2
-    y = (auth_root.winfo_screenheight() - 190) // 2
-    auth_root.geometry(f"360x190+{x}+{y}")
-
-    tk.Label(auth_root, text=f"🔒 보안 경고\n{reason_msg}\n관리자 암호를 입력하세요.", 
-             font=("맑은 고딕", 9, "bold"), fg="#ff8787", bg="#1a1f26", justify=tk.CENTER).pack(pady=(15, 8))
-
-    pw_box = tk.Entry(auth_root, show="*", font=("Arial", 14), justify="center", bg="#15181e", fg="#ffffff")
-    pw_box.pack(fill=tk.X, padx=30, pady=5)
-    pw_box.focus_set()
-
-    err_lbl = tk.Label(auth_root, text="", font=("맑은 고딕", 9), fg="#ff6b6b", bg="#1a1f26")
-    err_lbl.pack()
-
-    unlocked = [False]
-
-    def check_unlock(event=None):
-        if pw_box.get() == PROTECTION_PASSWORD:
-            unlocked[0] = True
-            auth_root.destroy()
-        else:
-            err_lbl.config(text="보안 암호가 올바르지 않습니다.")
-            pw_box.delete(0, tk.END)
-
-    pw_box.bind("<Return>", check_unlock)
-    tk.Button(auth_root, text="잠금 해제", command=check_unlock, bg="#dc3545", fg="#ffffff",
-              font=("맑은 고딕", 10, "bold"), relief="flat", padx=10, pady=2).pack(pady=8)
-
-    auth_root.mainloop()
-    return unlocked[0]
-
-check_file_integrity_and_lock()
-
-# ==========================================
-# 2. 중복 실행 방지 (Single Instance Lock)
+# 1. 중복 실행 방지 (Single Instance Lock)
 # ==========================================
 SINGLE_INSTANCE_MUTEX = None
 if os.name == 'nt':
     try:
         kernel32 = ctypes.windll.kernel32
-        MUTEX_NAME = "Aluko_Front_QR_Reader_Mutex"
+        MUTEX_NAME = "Aluko_Rear_QR_Reader_Mutex"
         SINGLE_INSTANCE_MUTEX = kernel32.CreateMutexW(None, False, MUTEX_NAME)
         if kernel32.GetLastError() == 183:
             root_temp = tk.Tk()
             root_temp.withdraw()
-            messagebox.showwarning("중복 실행 경고", "이미 Aluko_Front_QR Reader 프로그램이 실행 중입니다.")
+            messagebox.showwarning("중복 실행 경고", "이미 Aluko_Rear_QR Reader 프로그램이 실행 중입니다.")
             sys.exit(0)
     except Exception:
         pass
 
 # ==========================================
-# 3. FRONT 전용 모델 설정
+# 2. REAR 전용 모델 설정
 # ==========================================
 MODEL_CONFIG = {
-    'S-FRONT': 'MPL02916AD',
-    'R-FRONT': 'MPL02926AD'
+    'S-REAR': 'MPL02914AD',
+    'R-REAR': 'MPL02925AD'
 }
 
 CODE_TO_MODEL = {v: k for k, v in MODEL_CONFIG.items()}
@@ -144,9 +62,9 @@ def get_base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 BASE_DIR = get_base_dir()
-COUNT_FILE = os.path.join(BASE_DIR, "counts_front.json")
-STATE_FILE = os.path.join(BASE_DIR, "pallet_state_front.json")
-CAPTURE_BASE_DIR = os.path.join(BASE_DIR, "captures_front")
+COUNT_FILE = os.path.join(BASE_DIR, "counts_rear.json")
+STATE_FILE = os.path.join(BASE_DIR, "pallet_state_rear.json")
+CAPTURE_BASE_DIR = os.path.join(BASE_DIR, "captures_rear")
 os.makedirs(CAPTURE_BASE_DIR, exist_ok=True)
 
 FILE_ATTRIBUTE_NORMAL = 0x80
@@ -181,9 +99,12 @@ def get_quarter_filename(model_name, dt=None):
 def sanitize_filename(name):
     return re.sub(r'[\/:*?"<>|;]', '_', name).strip()
 
+# ==========================================
+# 3. 다국어 패키지 딕셔너리
+# ==========================================
 LANG_PACK = {
     "한국어": {
-        "title": "Aluko_Front_QR Reader",
+        "title": "Aluko_Rear_QR Reader",
         "pw_setting": "⚙ 비밀번호 설정",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -242,7 +163,7 @@ LANG_PACK = {
         "pw_err": "비밀번호가 올바르지 않습니다."
     },
     "English": {
-        "title": "Aluko_Front_QR Reader",
+        "title": "Aluko_Rear_QR Reader",
         "pw_setting": "⚙ Password Setting",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -284,7 +205,7 @@ LANG_PACK = {
         "ng_label_dup_msg": "[Label QR NG: Already used Label QR]\n\nScanned Label QR: {code}...\nAlready registered/packed duplicate label.\n\nEnter 6-digit admin password to unlock.",
         "ng_group_title": "⚠️ Grouping NG - Quantity Mismatch",
         "ng_group_msg": "[Grouping NG: Item qty and Label packed qty mismatch]\n\nLabel QR Specified Qty: {expected}\nCurrent Scanned Item Qty: {current}\n\nQuantities do not match. Cannot proceed grouping.\nEnter 6-digit admin password to unlock.",
-        "ng_limit_title": "⚠️️ NG - Label QR Missing",
+        "ng_limit_title": "⚠️ NG - Label QR Missing",
         "ng_limit_msg": "[NG Occurred: Label QR Missing]\n\nAll {max_cnt} items have already been scanned.\nThe 11th item will not be recorded.\nScan Label QR first to complete box grouping.\n\nEnter 6-digit admin password to unlock.",
         "ng_mgr_err_title": "⚠️ NG - Manager Mode Error",
         "ng_mgr_err_msg": "[NG: New barcodes must be scanned in general mode]\n\nScanned Barcode: {code}\nOnly already registered barcodes can be re-entered in duplicate rescan mode.\n\nEnter 6-digit admin password to unlock.",
@@ -301,7 +222,7 @@ LANG_PACK = {
         "pw_err": "Incorrect password."
     },
     "Polski": {
-        "title": "Aluko_Front_QR Reader",
+        "title": "Aluko_Rear_QR Reader",
         "pw_setting": "⚙ Ustawienia hasła",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -372,13 +293,13 @@ ACCENT_YELLOW = "#f59f00"
 class QRScanStationApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Aluko_Front_QR Reader")
+        self.root.title("Aluko_Rear_QR Reader")
         self.root.geometry("1440x880")
         self.root.minsize(1280, 780)
         self.root.configure(bg=BG_MAIN)
 
         self.current_lang = tk.StringVar(value="한국어")
-        self.current_model = tk.StringVar(value='S-FRONT')
+        self.current_model = tk.StringVar(value='S-REAR')
         self.admin_password = DEFAULT_PASSWORD
         self.model_session_id = 0
 
@@ -544,7 +465,7 @@ class QRScanStationApp:
 
         selected_items = self.tree.selection()
         if not selected_items:
-            messagebox.showwarning("선택 없음", "삭제할 기록 행을 [FRONT 기록] 테이블에서 마우스로 먼저 선택해 주세요.", parent=self.root)
+            messagebox.showwarning("선택 없음", "삭제할 기록 행을 [REAR 기록] 테이블에서 마우스로 먼저 선택해 주세요.", parent=self.root)
             self.scan_entry.focus_set()
             return
 
@@ -799,7 +720,7 @@ class QRScanStationApp:
         header_frame = tk.Frame(self.root, bg=BG_MAIN, height=45)
         header_frame.pack(fill=tk.X, padx=20, pady=(10, 4))
 
-        tk.Label(header_frame, text="Aluko_Front_QR Reader", font=("Arial", 12, "bold"), 
+        tk.Label(header_frame, text="Aluko_Rear_QR Reader", font=("Arial", 12, "bold"), 
                  fg=TEXT_COLOR, bg=BG_MAIN).pack(side=tk.LEFT, padx=(0, 15))
 
         self.model_combo = ttk.Combobox(
@@ -1696,6 +1617,16 @@ class QRScanStationApp:
                 )
                 return
 
+            has_ng_item = any(item.get("result") == "NG" for item in self.pending_items)
+            if has_ng_item:
+                self.set_status("NG BLOCK", "#dc3545", "#3a1c1f")
+                self.open_lock_popup(
+                    title_text="🚫 Grouping 차단 - NG 자재 포함",
+                    msg="[그룹핑 오류: 미그룹 스캔 내역에 NG 항목이 포함되어 있습니다]\n\n중복 스캔 등으로 인해 NG 처리된 자재가 남아있으면 Box 묶음을 진행할 수 없습니다.\n[MANAGER MODE]를 통해 해당 자재를 정상 처리한 후 다시 시도하세요.",
+                    header_bg="#3a1c1f", header_fg="#ff6b6b"
+                )
+                return
+
             self.capture_webcam_photo(raw_code)
 
             self.scanned_label_by_model[curr_model].add(raw_code)
@@ -1779,6 +1710,10 @@ class QRScanStationApp:
                     cur_p = self.pallet_state[curr_model]["current_pallet"]
                     dup_text = self.t("dup_scan_tag")
                     self.tree.insert("", 0, values=(cur_p, day_str, time_str, "-", raw_code, "NG", dup_text), tags=("ng_row",))
+
+                    for p_item in self.pending_items:
+                        if p_item["code"].strip().upper() == clean_upper_code:
+                            p_item["result"] = "NG"
 
                     matched_label_qr = None
                     for item_id in self.tree.get_children():
