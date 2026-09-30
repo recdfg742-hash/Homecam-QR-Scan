@@ -33,22 +33,22 @@ SINGLE_INSTANCE_MUTEX = None
 if os.name == 'nt':
     try:
         kernel32 = ctypes.windll.kernel32
-        MUTEX_NAME = "Aluko_Front_QR_Reader_Mutex"
+        MUTEX_NAME = "Aluko_Rear_QR_Reader_Mutex"
         SINGLE_INSTANCE_MUTEX = kernel32.CreateMutexW(None, False, MUTEX_NAME)
         if kernel32.GetLastError() == 183:
             root_temp = tk.Tk()
             root_temp.withdraw()
-            messagebox.showwarning("중복 실행 경고", "이미 Aluko_Front_QR Reader 프로그램이 실행 중입니다.")
+            messagebox.showwarning("중복 실행 경고", "이미 Aluko_Rear_QR Reader 프로그램이 실행 중입니다.")
             sys.exit(0)
     except Exception:
         pass
 
 # ==========================================
-# 2. FRONT 모델 설정
+# 2. REAR 전용 모델 설정
 # ==========================================
 MODEL_CONFIG = {
-    'S-FRONT': 'MPL02916AD',
-    'R-FRONT': 'MPL02926AD'
+    'S-REAR': 'MPL02914AD',
+    'R-REAR': 'MPL02925AD'
 }
 
 CODE_TO_MODEL = {v: k for k, v in MODEL_CONFIG.items()}
@@ -62,9 +62,9 @@ def get_base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 BASE_DIR = get_base_dir()
-COUNT_FILE = os.path.join(BASE_DIR, "counts_front.json")
-STATE_FILE = os.path.join(BASE_DIR, "pallet_state_front.json")
-CAPTURE_BASE_DIR = os.path.join(BASE_DIR, "captures_front")
+COUNT_FILE = os.path.join(BASE_DIR, "counts_rear.json")
+STATE_FILE = os.path.join(BASE_DIR, "pallet_state_rear.json")
+CAPTURE_BASE_DIR = os.path.join(BASE_DIR, "captures_rear")
 os.makedirs(CAPTURE_BASE_DIR, exist_ok=True)
 
 FILE_ATTRIBUTE_NORMAL = 0x80
@@ -99,9 +99,12 @@ def get_quarter_filename(model_name, dt=None):
 def sanitize_filename(name):
     return re.sub(r'[\/:*?"<>|;]', '_', name).strip()
 
+# ==========================================
+# 3. 다국어 사전 (Pallet 필수 리딩 알림 포함)
+# ==========================================
 LANG_PACK = {
     "한국어": {
-        "title": "Aluko_Front_QR Reader",
+        "title": "Aluko_Rear_QR Reader",
         "pw_setting": "⚙ 비밀번호 설정",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -149,18 +152,18 @@ LANG_PACK = {
         "ng_mgr_err_msg": "[NG: 신규 바코드는 일반 모드에서 스캔해야 합니다]\n\n스캔 바코드: {code}\n중복 재스캔 모드에서는 이미 등록된 바코드만 재입력 가능합니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_dup_title": "🚫 QR NG - 중복 바코드 감지",
         "ng_dup_msg": "[QR NG 발생: 이미 스캔된 바코드입니다]\n\n스캔 바코드: {code}\n해당 제품 및 연결된 박스 헤더가 NG로 변경되었습니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
-        "ng_pallet_mid_title": "⚠️ NG - Pallet 리딩 시점 오류",
+        "ng_pallet_mid_title": "⚠️️ NG - Pallet 리딩 시점 오류",
         "ng_pallet_mid_msg": "[NG: 단품 스캔 도중에는 Pallet QR을 리딩할 수 없습니다]\n\n현재 {count}개의 단품이 스캔 중입니다.\n10개 단품 및 Label QR 스캔을 완료한 후 Pallet QR을 리딩하세요.",
-        "ng_pallet_limit_title": "🚫 NG - Pallet QR 누락 (13박스 초과)",
-        "ng_pallet_limit_msg": "[NG: Pallet QR 리딩 누락]\n\n이미 12개 박스가 채워졌습니다.\n새 Pallet QR을 리딩하지 않고 13번째 이상 박스를 진행할 수 없습니다.\n\n관리자 비밀번호를 입력하여 해제하세요.",
+        "ng_pallet_limit_title": "🚫 Pallet NG - 새 Pallet QR 스캔 필수",
+        "ng_pallet_limit_msg": "[Pallet NG: 12개 박스(120개 단품) 포장이 완료되었습니다]\n\n새로운 Pallet QR을 먼저 스캔하기 전에는 제품을 찍을 수 없습니다.\n\n관리자 비밀번호로 잠금을 해제한 후, 반드시 새로운 Pallet QR을 스캔하세요.",
         "pallet_popup_title": "Pallet QR 스캔 대기",
-        "pallet_popup_msg": "12개 박스 포장이 완료되었습니다.\n새로운 Pallet QR을 스캔해주세요.",
+        "pallet_popup_msg": "12개 박스(120개) 포장이 완료되었습니다.\n새로운 Pallet QR을 스캔해주세요.",
         "unlock_btn": "확인 및 잠금 해제",
         "confirm_btn": "확인 (Enter)",
         "pw_err": "비밀번호가 올바르지 않습니다."
     },
     "English": {
-        "title": "Aluko_Front_QR Reader",
+        "title": "Aluko_Rear_QR Reader",
         "pw_setting": "⚙ Password Setting",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -194,7 +197,7 @@ LANG_PACK = {
         "sorting_msg": "[Notice: Sorting Item]\n\nDMC Code: {code}\n\nThis item is registered on the Sorting target list.\nIsolate the barcode and press [Enter].",
         "ng_model_title": "⚠️ NG - Model Mismatch",
         "ng_model_msg": "[NG: Selected model and barcode code do not match]\n\nCurrent Model: {model} ({target})\nScanned Code: {code}\n\nEnter 6-digit admin password to unlock.",
-        "ng_pallet_model_title": "⚠️ NG - Pallet QR Model Mismatch",
+        "ng_pallet_model_title": "⚠️️ NG - Pallet QR Model Mismatch",
         "ng_pallet_model_msg": "[NG: Pallet QR model code does not match]\n\nCurrent Model: {model} ({target})\nScanned Pallet QR: {code}\n\nPrepare correct Pallet QR and unlock with admin password.",
         "ng_pallet_dup_title": "🚫 NG - Pallet QR Duplicate/Sequence Error",
         "ng_pallet_dup_msg": "[NG: Pallet QR duplicate reading or incomplete box]\n\n1) Pallet change is allowed only after completing at least 1 box.\n2) Used Pallet QR cannot be registered again.\n\nEnter admin password to unlock.",
@@ -210,16 +213,16 @@ LANG_PACK = {
         "ng_dup_msg": "[QR NG Occurred: Already scanned barcode]\n\nScanned Barcode: {code}\nThis item and connected box header have been changed to NG.\n\nEnter 6-digit admin password to unlock.",
         "ng_pallet_mid_title": "⚠️ NG - Pallet Reading Timing Error",
         "ng_pallet_mid_msg": "[NG: Cannot read Pallet QR during item scanning]\n\nCurrently {count} items are being scanned.\nComplete 10 items and Label QR scan before reading Pallet QR.",
-        "ng_pallet_limit_title": "🚫 NG - Pallet QR Missing (Exceeded 13 Boxes)",
-        "ng_pallet_limit_msg": "[NG: Pallet QR Reading Missing]\n\n12 boxes have already been filled.\nCannot proceed to 13th+ box without reading new Pallet QR.\n\nEnter admin password to unlock.",
+        "ng_pallet_limit_title": "🚫 Pallet NG - Scan New Pallet QR First",
+        "ng_pallet_limit_msg": "[Pallet NG: 12 boxes (120 items) packing is completed]\n\nYou cannot scan items before scanning a new Pallet QR.\n\nUnlock with admin password and scan a new Pallet QR first.",
         "pallet_popup_title": "Pallet QR Scan Waiting",
-        "pallet_popup_msg": "12 box packings are completed.\nPlease scan a new Pallet QR.",
+        "pallet_popup_msg": "12 boxes (120 items) packing completed.\nPlease scan a new Pallet QR.",
         "unlock_btn": "Confirm & Unlock",
         "confirm_btn": "Confirm (Enter)",
         "pw_err": "Incorrect password."
     },
     "Polski": {
-        "title": "Aluko_Front_QR Reader",
+        "title": "Aluko_Rear_QR Reader",
         "pw_setting": "⚙ Ustawienia hasła",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -269,10 +272,10 @@ LANG_PACK = {
         "ng_dup_msg": "[QR NG: Ten kod został już zeskanowany]\n\nZeskanowany kod: {code}\nTen przedmiot i połączony nagłówek zostały zmienione na NG.\n\nWprowadź hasło administratora.",
         "ng_pallet_mid_title": "⚠️ NG - Błąd momentu odczytu palety",
         "ng_pallet_mid_msg": "[NG: Nie można czytać Pallet QR podczas skanowania sztuk]\n\nObecnie skanowanych jest {count} sztuk.\nZakończ 10 sztuk i Label QR przed odczytem palety.",
-        "ng_pallet_limit_title": "🚫 NG - Brak Pallet QR (Przekroczono 12 boxów)",
-        "ng_pallet_limit_msg": "[NG: Brak odczytu Pallet QR]\n\nWypełniono już 12 boxów.\nNie można przejść do 13. boxu bez odczytu nowego Pallet QR.\n\nWprowadź hasło administratora.",
+        "ng_pallet_limit_title": "🚫 Pallet NG - Wymagany skan nowej palety",
+        "ng_pallet_limit_msg": "[Pallet NG: Zakończono pakowanie 12 boxów]\n\nNie można skanować sztuk przed zeskanowaniem nowej palety.\n\nOdblokuj hasłem i zeskanuj nowy Pallet QR.",
         "pallet_popup_title": "Oczekiwanie na Pallet QR",
-        "pallet_popup_msg": "Zakończono pakowanie 12 boxów.\nZeskanuj nowy Pallet QR.",
+        "pallet_popup_msg": "Zakończono pakowanie 12 boxów (120 sztuk).\nZeskanuj nowy Pallet QR.",
         "unlock_btn": "Potwierdź i odblokuj",
         "confirm_btn": "Potwierdź (Enter)",
         "pw_err": "Nieprawidłowe hasło."
@@ -290,13 +293,13 @@ ACCENT_YELLOW = "#f59f00"
 class QRScanStationApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Aluko_Front_QR Reader")
+        self.root.title("Aluko_Rear_QR Reader")
         self.root.geometry("1440x880")
         self.root.minsize(1280, 780)
         self.root.configure(bg=BG_MAIN)
 
         self.current_lang = tk.StringVar(value="한국어")
-        self.current_model = tk.StringVar(value='S-FRONT')
+        self.current_model = tk.StringVar(value='S-REAR')
         self.admin_password = DEFAULT_PASSWORD
         self.model_session_id = 0
 
@@ -354,7 +357,7 @@ class QRScanStationApp:
         threading.Thread(target=_beep, daemon=True).start()
 
     def find_and_open_camera(self):
-        search_order = [1, 2, 3]  # 내장 0번 카메라 제외, 외장 USB만 타겟팅
+        search_order = [1, 2, 3]  # 내장 카메라(0번) 원천 차단
         for idx in search_order:
             cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
             if not cap.isOpened():
@@ -461,7 +464,7 @@ class QRScanStationApp:
 
         selected_items = self.tree.selection()
         if not selected_items:
-            messagebox.showwarning("선택 없음", "삭제할 기록 행을 [FRONT 기록] 테이블에서 마우스로 먼저 선택해 주세요.", parent=self.root)
+            messagebox.showwarning("선택 없음", "삭제할 기록 행을 [REAR 기록] 테이블에서 마우스로 먼저 선택해 주세요.", parent=self.root)
             self.scan_entry.focus_set()
             return
 
@@ -716,7 +719,7 @@ class QRScanStationApp:
         header_frame = tk.Frame(self.root, bg=BG_MAIN, height=45)
         header_frame.pack(fill=tk.X, padx=20, pady=(10, 4))
 
-        tk.Label(header_frame, text="Aluko_Front_QR Reader", font=("Arial", 12, "bold"), 
+        tk.Label(header_frame, text="Aluko_Rear_QR Reader", font=("Arial", 12, "bold"), 
                  fg=TEXT_COLOR, bg=BG_MAIN).pack(side=tk.LEFT, padx=(0, 15))
 
         self.model_combo = ttk.Combobox(
@@ -1496,6 +1499,7 @@ class QRScanStationApp:
         curr_model = self.current_model.get()
         target_code = MODEL_CONFIG[curr_model].upper()
 
+        # Pallet QR 스캔인 경우
         if self.is_pallet_qr(raw_code):
             if not self.pallet_qr_feature_enabled:
                 return
@@ -1538,6 +1542,7 @@ class QRScanStationApp:
 
             self.pallet_state[curr_model]["current_pallet"] = upper_pallet_code
             self.pallet_state[curr_model]["box_count"] = 0
+            self.scanned_pallet_by_model[curr_model].add(upper_pallet_code)
             self.save_pallet_state()
             self.update_pallet_status_ui()
 
@@ -1547,6 +1552,17 @@ class QRScanStationApp:
             self.close_pallet_wait_popup()
             self.refresh_grouping_tab()
             self.set_status("OK", "#28a745", "#193322")
+            return
+
+        # [요청 반영: 12박스(120개) 완료 시 Pallet QR 미스캔 상태에서 단품/Label 스캔 원천 차단]
+        curr_box_cnt = self.pallet_state[curr_model]["box_count"]
+        if self.pallet_qr_feature_enabled and curr_box_cnt >= MAX_BOXES_PER_PALLET:
+            self.set_status("Pallet NG", "#dc3545", "#3a1c1f")
+            self.open_lock_popup(
+                title_text=self.t("ng_pallet_limit_title"),
+                msg=self.t("ng_pallet_limit_msg"),
+                header_bg="#2d1d20", header_fg="#f87171"
+            )
             return
 
         current_time = time.time()
@@ -1576,18 +1592,8 @@ class QRScanStationApp:
             self.open_sorting_popup(raw_code)
             return
 
+        # Label QR 처리
         if is_label_qr:
-            curr_box_cnt = self.pallet_state[curr_model]["box_count"]
-
-            if self.pallet_qr_feature_enabled and curr_box_cnt >= MAX_BOXES_PER_PALLET:
-                self.set_status("Pallet NG", "#dc3545", "#3a1c1f")
-                self.open_lock_popup(
-                    title_text=self.t("ng_pallet_limit_title"),
-                    msg=self.t("ng_pallet_limit_msg"),
-                    header_bg="#2d1d20", header_fg="#f87171"
-                )
-                return
-
             if raw_code in self.scanned_label_by_model[curr_model]:
                 self.set_status("Label QR NG", "#dc3545", "#3a1c1f")
                 self.open_lock_popup(
@@ -1613,6 +1619,7 @@ class QRScanStationApp:
                 )
                 return
 
+            # [요청 반영: 미그룹 목록 내 NG(중복 자재 등) 포함 시 박스 묶음 강제 차단]
             has_ng_item = any(item.get("result") == "NG" for item in self.pending_items)
             if has_ng_item:
                 self.set_status("NG BLOCK", "#dc3545", "#3a1c1f")
@@ -1623,7 +1630,7 @@ class QRScanStationApp:
                 )
                 return
 
-            # Label QR 스캔 시점 웹캠 사진 즉시 저장 (백그라운드 스레드)
+            # Label QR 스캔 즉시 백그라운드 스레드에서 딜레이 없이 캡처 저장
             self.capture_webcam_photo(raw_code)
 
             self.scanned_label_by_model[curr_model].add(raw_code)
@@ -1653,11 +1660,13 @@ class QRScanStationApp:
             self.direct_finalize_excel_group(curr_model, cur_pallet, raw_code, timestamp_full, items_to_bundle, header_text)
             self.refresh_grouping_tab()
 
+            # 12박스 채워지면 Pallet 대기 팝업 띄움
             if self.pallet_state[curr_model]["box_count"] >= MAX_BOXES_PER_PALLET:
                 self.pallet_qr_feature_enabled = True
                 self.update_pallet_status_ui()
                 self.open_pallet_wait_popup()
 
+        # 단품 DMC 처리
         if not is_label_qr:
             if len(self.pending_items) >= MAX_ITEMS_PER_BOX:
                 self.set_status("NG", "#dc3545", "#3a1c1f")
