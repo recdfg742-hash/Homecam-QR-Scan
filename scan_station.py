@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import gc
 import json
 import time
 import glob
@@ -8,7 +9,7 @@ import ctypes
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-from datetime import datetime
+from datetime import datetime, timedelta
 
 try:
     import cv2
@@ -44,7 +45,7 @@ if os.name == 'nt':
         pass
 
 # ==========================================
-# 2. FRONT 전용 모델 설정 (정식 AD 코드)
+# 2. FRONT 모델 설정
 # ==========================================
 MODEL_CONFIG = {
     'S-FRONT': 'MPL02916AD',
@@ -62,9 +63,11 @@ def get_base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 BASE_DIR = get_base_dir()
+DATA_DIR = os.path.join(BASE_DIR, "data")
 COUNT_FILE = os.path.join(BASE_DIR, "counts_front.json")
 STATE_FILE = os.path.join(BASE_DIR, "pallet_state_front.json")
 CAPTURE_BASE_DIR = os.path.join(BASE_DIR, "captures_front")
+os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(CAPTURE_BASE_DIR, exist_ok=True)
 
 FILE_ATTRIBUTE_NORMAL = 0x80
@@ -84,24 +87,20 @@ def hide_file(filepath):
     except Exception:
         pass
 
-def get_quarter_folder_name(model_name, dt=None):
+def get_month_folder_and_filepath(model_name, dt=None):
     if dt is None:
         dt = datetime.now()
-    year_2d = dt.strftime("%y")
-    quarter = (dt.month - 1) // 3 + 1
-    safe_model = model_name.replace('-', '_')
-    return f"Y{year_2d}_{quarter}Q_{safe_model}"
-
-def get_quarter_filename(model_name, dt=None):
-    q_folder = get_quarter_folder_name(model_name, dt)
-    return f"{q_folder}.xlsx"
+    yy_mm = dt.strftime("%y.%m")
+    folder_name = f"{yy_mm} data"
+    folder_path = os.path.join(DATA_DIR, folder_name)
+    os.makedirs(folder_path, exist_ok=True)
+    file_name = f"{yy_mm}_3P12S_{model_name}.xlsx"
+    file_path = os.path.join(folder_path, file_name)
+    return folder_path, file_path
 
 def sanitize_filename(name):
     return re.sub(r'[\/:*?"<>|;]', '_', name).strip()
 
-# ==========================================
-# 3. 다국어 패키지 딕셔너리
-# ==========================================
 LANG_PACK = {
     "한국어": {
         "title": "Aluko_Front_QR Reader",
@@ -116,9 +115,10 @@ LANG_PACK = {
         "reset_btn": "RESET (카운터 초기화)",
         "manager_btn": "MANAGER MODE",
         "manager_btn_on": "MANAGER [DMC 재스캔 대기]",
+        "manager_btn_rework": "MANAGER [RE-WORK 진행 중]",
         "pending_status": "미그룹 스캔 {count}건 – Label QR 대기 중",
         "pallet_status": "현재 Pallet: {pallet} ({boxes}/{max_b} 박스)",
-        "record_header": "{model} 기록",
+        "record_header": "{model} 기록 (최근 7일)",
         "grouping_header": "{model} Pallet - Label Grouping 현황",
         "th_pallet": "Pallet",
         "th_box_seq": "박스 번호",
@@ -138,7 +138,7 @@ LANG_PACK = {
         "sorting_msg": "[알림: Sorting 필요 제품]\n\nDMC Code: {code}\n\n해당 제품은 Sorting 대상 리스트에 등록되어 있습니다.\n바코드를 별도로 격리한 뒤 [Enter] 키를 누르세요.",
         "ng_model_title": "⚠️ NG - 모델 불일치",
         "ng_model_msg": "[NG: 선택 모델과 바코드 코드가 일치하지 않습니다]\n\n현재 선택 모델: {model} ({target})\n스캔된 코드: {code}\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
-        "ng_pallet_model_title": "⚠️ NG - Pallet QR 모델 불일치",
+        "ng_pallet_model_title": "⚠️️ NG - Pallet QR 모델 불일치",
         "ng_pallet_model_msg": "[NG: Pallet QR 모델 코드가 일치하지 않습니다]\n\n현재 선택 모델: {model} ({target})\n스캔 Pallet QR: {code}\n\n올바른 Pallet QR을 준비한 뒤 관리자 비밀번호로 해제하세요.",
         "ng_pallet_dup_title": "🚫 NG - Pallet QR 중복/순서 오류",
         "ng_pallet_dup_msg": "[NG: Pallet QR 중복 리딩 또는 박스 미완료]\n\n1) 최소 1개 이상의 박스를 완료한 후에만 팔레트 교체가 가능합니다.\n2) 이미 사용된 Pallet QR은 중복 등록할 수 없습니다.\n\n관리자 비밀번호를 입력하여 해제하세요.",
@@ -154,13 +154,13 @@ LANG_PACK = {
         "ng_dup_msg": "[QR NG 발생: 이미 스캔된 바코드입니다]\n\n스캔 바코드: {code}\n해당 제품 및 연결된 박스 헤더가 NG로 변경되었습니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_pallet_mid_title": "⚠️ NG - Pallet 리딩 시점 오류",
         "ng_pallet_mid_msg": "[NG: 단품 스캔 도중에는 Pallet QR을 리딩할 수 없습니다]\n\n현재 {count}개의 단품이 스캔 중입니다.\n10개 단품 및 Label QR 스캔을 완료한 후 Pallet QR을 리딩하세요.",
-        "ng_pallet_limit_title": "🚫 Pallet NG - 새 Pallet QR 스캔 필수",
-        "ng_pallet_limit_msg": "[Pallet NG: 12개 박스(120개 단품) 포장이 완료되었습니다]\n\n새로운 Pallet QR을 먼저 스캔하기 전에는 제품을 찍을 수 없습니다.\n\n관리자 비밀번호로 잠금을 해제한 후, 반드시 새로운 Pallet QR을 스캔하세요.",
-        "pallet_popup_title": "Pallet QR 스캔 대기",
-        "pallet_popup_msg": "12개 박스(120개) 포장이 완료되었습니다.\n새로운 Pallet QR을 스캔해주세요.",
+        "ng_pallet_limit_title": "🚫 Pallet QR 리딩 누락",
+        "ng_pallet_limit_msg": "[Pallet NG: Pallet QR 리딩 누락]\n\n12개 박스(120개 단품) 포장이 이미 완료되었습니다.\n새로운 Pallet QR을 리딩하지 않고 다음 제품을 진행할 수 없습니다.\n\n관리자 비밀번호로 해제 후 반드시 새로운 Pallet QR을 리딩하세요.",
         "unlock_btn": "확인 및 잠금 해제",
         "confirm_btn": "확인 (Enter)",
-        "pw_err": "비밀번호가 올바르지 않습니다."
+        "pw_err": "비밀번호가 올바르지 않습니다.",
+        "cam_ng_title": "⚠️ CAM NG - 웹캠 연결 오류",
+        "cam_ng_msg": "[CAM NG 발생]\n\n외장 USB 웹캠 연결이 끊어졌거나 영상이 수신되지 않습니다.\nUSB 케이블을 다시 연결하세요."
     },
     "English": {
         "title": "Aluko_Front_QR Reader",
@@ -175,9 +175,10 @@ LANG_PACK = {
         "reset_btn": "RESET (Clear Counter)",
         "manager_btn": "MANAGER MODE",
         "manager_btn_on": "MANAGER [Waiting Rescan]",
+        "manager_btn_rework": "MANAGER [RE-WORK Active]",
         "pending_status": "{count} unbundled items – Waiting for Label QR",
         "pallet_status": "Current Pallet: {pallet} ({boxes}/{max_b} Boxes)",
-        "record_header": "{model} Records",
+        "record_header": "{model} Records (Last 7 Days)",
         "grouping_header": "{model} Pallet - Label Grouping Status",
         "th_pallet": "Pallet",
         "th_box_seq": "Box Seq",
@@ -203,7 +204,7 @@ LANG_PACK = {
         "ng_pallet_dup_msg": "[NG: Pallet QR duplicate reading or incomplete box]\n\n1) Pallet change is allowed only after completing at least 1 box.\n2) Used Pallet QR cannot be registered again.\n\nEnter admin password to unlock.",
         "ng_label_dup_title": "⚠️ Label QR NG - Duplicate Scan",
         "ng_label_dup_msg": "[Label QR NG: Already used Label QR]\n\nScanned Label QR: {code}...\nAlready registered/packed duplicate label.\n\nEnter 6-digit admin password to unlock.",
-        "ng_group_title": "⚠️ Grouping NG - Quantity Mismatch",
+        "ng_group_title": "⚠️️ Grouping NG - Quantity Mismatch",
         "ng_group_msg": "[Grouping NG: Item qty and Label packed qty mismatch]\n\nLabel QR Specified Qty: {expected}\nCurrent Scanned Item Qty: {current}\n\nQuantities do not match. Cannot proceed grouping.\nEnter 6-digit admin password to unlock.",
         "ng_limit_title": "⚠️ NG - Label QR Missing",
         "ng_limit_msg": "[NG Occurred: Label QR Missing]\n\nAll {max_cnt} items have already been scanned.\nThe 11th item will not be recorded.\nScan Label QR first to complete box grouping.\n\nEnter 6-digit admin password to unlock.",
@@ -213,13 +214,13 @@ LANG_PACK = {
         "ng_dup_msg": "[QR NG Occurred: Already scanned barcode]\n\nScanned Barcode: {code}\nThis item and connected box header have been changed to NG.\n\nEnter 6-digit admin password to unlock.",
         "ng_pallet_mid_title": "⚠️ NG - Pallet Reading Timing Error",
         "ng_pallet_mid_msg": "[NG: Cannot read Pallet QR during item scanning]\n\nCurrently {count} items are being scanned.\nComplete 10 items and Label QR scan before reading Pallet QR.",
-        "ng_pallet_limit_title": "🚫 Pallet NG - Scan New Pallet QR First",
-        "ng_pallet_limit_msg": "[Pallet NG: 12 boxes (120 items) packing is completed]\n\nYou cannot scan items before scanning a new Pallet QR.\n\nUnlock with admin password and scan a new Pallet QR first.",
-        "pallet_popup_title": "Pallet QR Scan Waiting",
-        "pallet_popup_msg": "12 boxes (120 items) packing completed.\nPlease scan a new Pallet QR.",
+        "ng_pallet_limit_title": "🚫 Pallet QR Reading Missing",
+        "ng_pallet_limit_msg": "[Pallet NG: Pallet QR reading is missing]\n\n12 boxes (120 items) packing is already completed.\nYou cannot proceed to next items without reading a new Pallet QR.\n\nUnlock with password and scan a new Pallet QR.",
         "unlock_btn": "Confirm & Unlock",
         "confirm_btn": "Confirm (Enter)",
-        "pw_err": "Incorrect password."
+        "pw_err": "Incorrect password.",
+        "cam_ng_title": "⚠️ CAM NG - Webcam Connection Error",
+        "cam_ng_msg": "[CAM NG Occurred]\n\nExternal USB webcam is disconnected or frame is missing.\nPlease reconnect the USB cable."
     },
     "Polski": {
         "title": "Aluko_Front_QR Reader",
@@ -234,9 +235,10 @@ LANG_PACK = {
         "reset_btn": "RESET (Wyczyść licznik)",
         "manager_btn": "MANAGER MODE",
         "manager_btn_on": "MANAGER [Oczekiwanie]",
+        "manager_btn_rework": "MANAGER [RE-WORK Aktywny]",
         "pending_status": "{count} niesparowanych sztuk – Oczekiwanie na Label QR",
         "pallet_status": "Aktualna Palleta: {pallet} ({boxes}/{max_b} Boxów)",
-        "record_header": "Zapisy {model}",
+        "record_header": "Zapisy {model} (Ostatnie 7 dni)",
         "grouping_header": "Status grupowania {model} Pallet - Label",
         "th_pallet": "Pallet",
         "th_box_seq": "Seq Box",
@@ -272,13 +274,13 @@ LANG_PACK = {
         "ng_dup_msg": "[QR NG: Ten kod został już zeskanowany]\n\nZeskanowany kod: {code}\nTen przedmiot i połączony nagłówek zostały zmienione na NG.\n\nWprowadź hasło administratora.",
         "ng_pallet_mid_title": "⚠️ NG - Błąd momentu odczytu palety",
         "ng_pallet_mid_msg": "[NG: Nie można czytać Pallet QR podczas skanowania sztuk]\n\nObecnie skanowanych jest {count} sztuk.\nZakończ 10 sztuk i Label QR przed odczytem palety.",
-        "ng_pallet_limit_title": "🚫 Pallet NG - Wymagany skan nowej palety",
-        "ng_pallet_limit_msg": "[Pallet NG: Zakończono pakowanie 12 boxów]\n\nNie można skanować sztuk przed zeskanowaniem nowej palety.\n\nOdblokuj hasłem i zeskanuj nowy Pallet QR.",
-        "pallet_popup_title": "Oczekiwanie na Pallet QR",
-        "pallet_popup_msg": "Zakończono pakowanie 12 boxów (120 sztuk).\nZeskanuj nowy Pallet QR.",
+        "ng_pallet_limit_title": "🚫 Brak odczytu Pallet QR",
+        "ng_pallet_limit_msg": "[Pallet NG: Brak odczytu Pallet QR]\n\nWypełniono już 12 boxów (120 sztuk).\nNie można przejść do kolejnych produktów bez nowego Pallet QR.\n\nOdblokuj hasłem i zeskanuj nowy Pallet QR.",
         "unlock_btn": "Potwierdź i odblokuj",
         "confirm_btn": "Potwierdź (Enter)",
-        "pw_err": "Nieprawidłowe hasło."
+        "pw_err": "Nieprawidłowe hasło.",
+        "cam_ng_title": "⚠️ CAM NG - Błąd kamery USB",
+        "cam_ng_msg": "[Błąd CAM NG]\n\nZewnętrzna kamera USB została odłączona.\nPodłącz ponownie kabel USB."
     }
 }
 
@@ -304,6 +306,7 @@ class QRScanStationApp:
         self.model_session_id = 0
 
         self.is_manager_mode = False
+        self.is_rework_mode = False  # [신규 기능 1] RE-WORK 모드 플래그
         self.pallet_qr_feature_enabled = True  
 
         self.cap = None
@@ -312,9 +315,11 @@ class QRScanStationApp:
         self.cam_thread_running = True
         self.cam_photo = None
         self.cam_index_used = -1
+        self.cam_ng_popup_active = False
+        self.cam_ng_dialog = None
 
         self.active_popup = None
-        self.pallet_wait_popup = None
+        self.alarm_thread_running = False
 
         self.last_scanned_code = ""
         self.last_scanned_time = 0.0
@@ -348,13 +353,38 @@ class QRScanStationApp:
             return text.format(**kwargs)
         return text
 
-    def play_alarm_sound(self):
+    def play_triple_beep(self):
         def _beep():
             if winsound:
                 for _ in range(3):
-                    winsound.Beep(1000, 350)
-                    time.sleep(0.08)
+                    try:
+                        winsound.Beep(1200, 250)
+                        time.sleep(0.08)
+                    except Exception:
+                        pass
         threading.Thread(target=_beep, daemon=True).start()
+
+    def start_looping_ng_alarm(self):
+        self.alarm_thread_running = True
+        def _loop():
+            while self.alarm_thread_running:
+                if winsound:
+                    for _ in range(3):
+                        if not self.alarm_thread_running:
+                            break
+                        try:
+                            winsound.Beep(1200, 250)
+                            time.sleep(0.08)
+                        except Exception:
+                            pass
+                for _ in range(15):
+                    if not self.alarm_thread_running:
+                        break
+                    time.sleep(0.1)
+        threading.Thread(target=_loop, daemon=True).start()
+
+    def stop_looping_ng_alarm(self):
+        self.alarm_thread_running = False
 
     def find_and_open_camera(self):
         search_order = [1, 2, 3]  # 내장 카메라(0번) 원천 차단
@@ -374,40 +404,88 @@ class QRScanStationApp:
 
     def start_usb_webcam_stream(self):
         def _webcam_worker():
+            consecutive_fail_count = 0
             while self.cam_thread_running:
                 if CV_AVAILABLE:
                     if self.cap is None or not self.cap.isOpened():
                         self.cap = self.find_and_open_camera()
                         if self.cap and self.cap.isOpened():
                             self.is_camera_ready = True
+                            consecutive_fail_count = 0
                             cam_type_str = f"외장 USB 웹캠 (CAM {self.cam_index_used})"
                             self.root.after(0, lambda: self.lbl_cam_status.config(
                                 text=f"● LIVE ({cam_type_str})", fg="#22c55e"
                             ))
+                            self.root.after(0, self.close_cam_ng_popup)
                         else:
                             self.is_camera_ready = False
+                            consecutive_fail_count += 1
                             self.root.after(0, lambda: self.lbl_cam_status.config(
                                 text="✕ 웹캠 연결 끊김 (재연결 시도 중...)", fg="#f87171"
                             ))
+                            if consecutive_fail_count >= 2:
+                                self.root.after(0, self.open_cam_ng_popup)
                             time.sleep(1.0)
                             continue
 
                     ret, frame = self.cap.read()
                     if ret and frame is not None:
                         self.current_webcam_frame = frame
+                        consecutive_fail_count = 0
+                        if self.cam_ng_popup_active:
+                            self.root.after(0, self.close_cam_ng_popup)
                     else:
+                        consecutive_fail_count += 1
                         if self.cap:
                             self.cap.release()
                         self.cap = None
                         self.is_camera_ready = False
+                        gc.collect()
+                        if consecutive_fail_count >= 2:
+                            self.root.after(0, self.open_cam_ng_popup)
+                        time.sleep(0.5)
                 else:
                     time.sleep(0.5)
 
         threading.Thread(target=_webcam_worker, daemon=True).start()
         self.root.after(200, self.update_camera_canvas)
 
+    def open_cam_ng_popup(self):
+        if self.cam_ng_popup_active or self.active_popup:
+            return
+        self.cam_ng_popup_active = True
+        self.play_triple_beep()
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title(self.t("cam_ng_title"))
+        dialog.resizable(False, False)
+        dialog.configure(bg="#3a1c1f")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        self.center_popup(dialog, 460, 220)
+        self.cam_ng_dialog = dialog
+
+        tk.Label(dialog, text="📷 CAM NG - 외장 웹캠 신호 없음", font=("맑은 고딕", 12, "bold"), bg="#3a1c1f", fg="#ff6b6b").pack(pady=(20, 10))
+        tk.Label(dialog, text=self.t("cam_ng_msg"), font=("맑은 고딕", 10), bg="#3a1c1f", fg="#e1e4ea", justify=tk.CENTER).pack(pady=10)
+
+        def _close():
+            self.close_cam_ng_popup()
+        tk.Button(dialog, text="닫기 (재연결 대기)", command=_close, font=("맑은 고딕", 10, "bold"),
+                  bg="#dc3545", fg="#ffffff", relief="flat", padx=15, pady=4).pack(pady=10)
+
+    def close_cam_ng_popup(self):
+        if self.cam_ng_dialog:
+            try:
+                self.cam_ng_dialog.grab_release()
+                self.cam_ng_dialog.destroy()
+            except Exception:
+                pass
+            self.cam_ng_dialog = None
+        self.cam_ng_popup_active = False
+
     def update_camera_canvas(self):
-        if self.current_webcam_frame is not None:
+        if self.current_webcam_frame is not None and self.is_camera_ready:
             frame_to_show = self.current_webcam_frame.copy()
             target_w, target_h = 390, 230
             ch, cw = frame_to_show.shape[:2]
@@ -427,21 +505,25 @@ class QRScanStationApp:
 
             self.cam_canvas.delete("all")
             self.cam_canvas.create_image(0, 0, anchor="nw", image=self.cam_photo)
+        else:
+            self.cam_canvas.delete("all")
+            self.cam_canvas.create_text(195, 115, text="[ CAM DISCONNECTED ]", fill="#ef4444", font=("Consolas", 12, "bold"))
 
         self.root.after(33, self.update_camera_canvas)
 
     def capture_webcam_photo(self, label_code):
-        if not CV_AVAILABLE or self.current_webcam_frame is None:
+        if not CV_AVAILABLE or self.current_webcam_frame is None or not self.is_camera_ready:
             return
 
         def _save_task():
             try:
                 frame_to_save = self.current_webcam_frame.copy()
                 curr_model = self.current_model.get()
-                q_folder_name = get_quarter_folder_name(curr_model)
-                today_str = datetime.now().strftime("%Y-%m-%d")
+                now = datetime.now()
+                yy_mm = now.strftime("%y.%m")
+                today_str = now.strftime("%Y-%m-%d")
 
-                target_save_dir = os.path.join(CAPTURE_BASE_DIR, q_folder_name, today_str)
+                target_save_dir = os.path.join(CAPTURE_BASE_DIR, f"{yy_mm} captures", today_str)
                 os.makedirs(target_save_dir, exist_ok=True)
 
                 safe_label_name = sanitize_filename(label_code)
@@ -453,13 +535,14 @@ class QRScanStationApp:
         threading.Thread(target=_save_task, daemon=True).start()
 
     def on_closing(self):
+        self.stop_looping_ng_alarm()
         self.cam_thread_running = False
         if self.cap and self.cap.isOpened():
             self.cap.release()
         self.root.destroy()
 
     def trigger_hidden_delete_action(self):
-        if self.active_popup or self.pallet_wait_popup:
+        if self.active_popup:
             return
 
         selected_items = self.tree.selection()
@@ -566,7 +649,7 @@ class QRScanStationApp:
         self.scan_entry.focus_set()
 
     def toggle_manager_mode(self):
-        if self.active_popup or self.pallet_wait_popup:
+        if self.active_popup:
             return
 
         win = tk.Toplevel(self.root)
@@ -606,12 +689,13 @@ class QRScanStationApp:
         dialog.transient(self.root)
         dialog.grab_set()
 
-        self.center_popup(dialog, 460, 200)
+        self.center_popup(dialog, 460, 260)
 
-        tk.Label(dialog, text="[ 관리자 작업 선택 ]", font=("맑은 고딕", 12, "bold"), fg="#38bdf8", bg=BG_PANEL).pack(pady=(18, 12))
+        tk.Label(dialog, text="[ 관리자 작업 선택 ]", font=("맑은 고딕", 12, "bold"), fg="#38bdf8", bg=BG_PANEL).pack(pady=(15, 10))
 
         def act_rescan_dmc():
             self.is_manager_mode = True
+            self.is_rework_mode = False
             self.btn_manager.config(bg="#f59f00", fg="#000000", text=self.t("manager_btn_on"))
             dialog.destroy()
             messagebox.showinfo("안내", "중복 단품 재스캔 모드가 활성화되었습니다.\n바코드를 1회 스캔하면 자동으로 일반 모드로 전환됩니다.", parent=self.root)
@@ -619,8 +703,27 @@ class QRScanStationApp:
 
         btn1 = tk.Button(dialog, text="🔄 중복 단품 DMC 재스캔 활성화", command=act_rescan_dmc,
                          bg="#1e3a5f", fg="#93c5fd", activebackground="#2b5278", activeforeground="#ffffff",
-                         font=("맑은 고딕", 10, "bold"), relief="flat", pady=8, cursor="hand2")
-        btn1.pack(fill=tk.X, padx=30, pady=5)
+                         font=("맑은 고딕", 10, "bold"), relief="flat", pady=6, cursor="hand2")
+        btn1.pack(fill=tk.X, padx=30, pady=4)
+
+        # [신규 기능 1] RE-WORK 모드 활성화 버튼
+        def act_activate_rework():
+            self.is_rework_mode = True
+            self.is_manager_mode = False
+            self.btn_manager.config(bg="#d97706", fg="#ffffff", text=self.t("manager_btn_rework"))
+            dialog.destroy()
+            messagebox.showinfo("RE-WORK 모드 활성화", 
+                                "🛠 RE-WORK 모드가 활성화되었습니다.\n\n"
+                                "1. Pallet QR 스캔 (기존 등록 파렛트 허용)\n"
+                                "2. 반송 제품 DMC 코드들 스캔 (수량 자유)\n"
+                                "3. 해당 수량과 일치하는 Label QR 스캔\n\n"
+                                "※ 1개 Label QR 묶음 완료 시 RE-WORK 모드가 자동 종료됩니다.", parent=self.root)
+            self.scan_entry.focus_set()
+
+        btn_rework = tk.Button(dialog, text="🛠 RE-WORK 모드 활성화 (반송품 재출하)", command=act_activate_rework,
+                               bg="#78350f", fg="#fde68a", activebackground="#92400e", activeforeground="#ffffff",
+                               font=("맑은 고딕", 10, "bold"), relief="flat", pady=6, cursor="hand2")
+        btn_rework.pack(fill=tk.X, padx=30, pady=4)
 
         status_txt = "현재: ON (스캔 필수)" if self.pallet_qr_feature_enabled else "현재: OFF (스캔 건너뜀)"
         btn_color = "#374151" if self.pallet_qr_feature_enabled else "#0369a1"
@@ -634,8 +737,8 @@ class QRScanStationApp:
 
         btn2 = tk.Button(dialog, text=f"📦 Pallet QR 리딩 기능 토글 [{status_txt}]", command=act_toggle_pallet_qr,
                          bg=btn_color, fg="#ffffff", activebackground="#475569", activeforeground="#ffffff",
-                         font=("맑은 고딕", 10, "bold"), relief="flat", pady=8, cursor="hand2")
-        btn2.pack(fill=tk.X, padx=30, pady=5)
+                         font=("맑은 고딕", 10, "bold"), relief="flat", pady=6, cursor="hand2")
+        btn2.pack(fill=tk.X, padx=30, pady=4)
 
     def load_model_counts(self):
         default_counts = {m: {"total": 0, "ok": 0, "ng": 0} for m in MODEL_CONFIG}
@@ -981,22 +1084,13 @@ class QRScanStationApp:
                     if not row or len(row) < 7:
                         continue
 
-                    if len(row) >= 8:
-                        p_val = str(row[0]).strip().upper() if row[0] and str(row[0]).strip() != "-" else ""
-                        lbl_val = str(row[1]).strip() if row[1] and str(row[1]).strip() != "-" else ""
-                        box_time = str(row[2]).strip() if row[2] and str(row[2]).strip() != "-" else ""
-                        seq_val = str(row[3]).strip() if row[3] else ""
-                        desc_val = str(row[4]).strip() if row[4] else ""
-                        dmc_time = str(row[5]).strip() if row[5] and str(row[5]).strip() != "-" else ""
-                        res_val = str(row[6]).strip() if row[6] else "OK"
-                    else:
-                        p_val = ""
-                        lbl_val = str(row[0]).strip() if row[0] and str(row[0]).strip() != "-" else ""
-                        box_time = str(row[1]).strip() if row[1] and str(row[1]).strip() != "-" else ""
-                        seq_val = str(row[2]).strip() if row[2] else ""
-                        desc_val = str(row[3]).strip() if row[3] else ""
-                        dmc_time = str(row[4]).strip() if row[4] and str(row[4]).strip() != "-" else ""
-                        res_val = str(row[5]).strip() if row[5] else "OK"
+                    p_val = str(row[0]).strip().upper() if row[0] and str(row[0]).strip() != "-" else ""
+                    lbl_val = str(row[1]).strip() if row[1] and str(row[1]).strip() != "-" else ""
+                    box_time = str(row[2]).strip() if row[2] and str(row[2]).strip() != "-" else ""
+                    seq_val = str(row[3]).strip() if row[3] else ""
+                    desc_val = str(row[4]).strip() if row[4] else ""
+                    dmc_time = str(row[5]).strip() if row[5] and str(row[5]).strip() != "-" else ""
+                    res_val = str(row[6]).strip() if row[6] else "OK"
 
                     if seq_val == "Final HEADER" and "Start" in desc_val:
                         current_pallet_code = p_val
@@ -1118,7 +1212,9 @@ class QRScanStationApp:
 
         self.btn_pw.config(text=self.t("pw_setting"))
         self.btn_reset.config(text=self.t("reset_btn"))
-        if self.is_manager_mode:
+        if self.is_rework_mode:
+            self.btn_manager.config(text=self.t("manager_btn_rework"))
+        elif self.is_manager_mode:
             self.btn_manager.config(text=self.t("manager_btn_on"))
         else:
             self.btn_manager.config(text=self.t("manager_btn"))
@@ -1238,69 +1334,6 @@ class QRScanStationApp:
         y = ry + (rh - height) // 2
         dialog.geometry(f"{width}x{height}+{max(0, x)}+{max(0, y)}")
 
-    def open_sorting_popup(self, dmc_code):
-        dialog = tk.Toplevel(self.root)
-        dialog.title(self.t("sorting_title"))
-        dialog.resizable(False, False)
-        dialog.configure(bg="#3a1c1f")
-
-        dialog.transient(self.root)
-        dialog.grab_set()
-        dialog.protocol("WM_DELETE_WINDOW", lambda: None)
-
-        self.center_popup(dialog, 520, 300)
-        self.active_popup = dialog
-
-        self.play_alarm_sound()
-
-        msg = self.t("sorting_msg", code=dmc_code)
-        tk.Label(dialog, text=msg, font=("맑은 고딕", 11, "bold"), bg="#3a1c1f", fg="#ff6b6b", justify=tk.LEFT).pack(pady=25, padx=20)
-
-        def close_dialog(event=None):
-            dialog.grab_release()
-            dialog.destroy()
-            self.active_popup = None
-            self.set_status("READY", "#adb5bd", "#2a2e37")
-            self.scan_entry.focus_set()
-
-        dialog.bind("<Return>", close_dialog)
-        dialog.bind("<KP_Enter>", close_dialog)
-
-        btn = tk.Button(dialog, text=self.t("confirm_btn"), command=close_dialog,
-                        font=("맑은 고딕", 11, "bold"), bg="#dc3545", fg="#ffffff",
-                        relief="flat", padx=20, pady=6, cursor="hand2")
-        btn.pack(pady=10)
-        btn.focus_set()
-
-    def open_pallet_wait_popup(self):
-        if self.pallet_wait_popup:
-            return
-
-        dialog = tk.Toplevel(self.root)
-        dialog.title(self.t("pallet_popup_title"))
-        dialog.resizable(False, False)
-        dialog.configure(bg="#1e293b")
-
-        dialog.transient(self.root)
-        dialog.grab_set()
-        dialog.protocol("WM_DELETE_WINDOW", lambda: None)
-
-        self.center_popup(dialog, 520, 240)
-        self.pallet_wait_popup = dialog
-
-        tk.Label(dialog, text="[12 BOX PACKING COMPLETE]", font=("맑은 고딕", 12, "bold"), fg="#38bdf8", bg="#1e293b").pack(pady=(25, 8))
-        tk.Label(dialog, text=self.t("pallet_popup_msg"), font=("맑은 고딕", 13, "bold"), fg="#f8fafc", bg="#1e293b").pack(pady=10)
-        tk.Label(dialog, text="* 새 Pallet QR을 스캔하면 자동으로 해제됩니다.", font=("맑은 고딕", 9), fg="#94a3b8", bg="#1e293b").pack(pady=5)
-
-    def close_pallet_wait_popup(self):
-        if self.pallet_wait_popup:
-            try:
-                self.pallet_wait_popup.grab_release()
-                self.pallet_wait_popup.destroy()
-            except Exception:
-                pass
-            self.pallet_wait_popup = None
-
     def on_model_changed(self, event=None):
         self.model_session_id += 1
         current_session = self.model_session_id
@@ -1323,12 +1356,10 @@ class QRScanStationApp:
         self.scan_entry.focus_set()
 
     def get_all_model_files(self, model_name):
-        safe_model = model_name.replace('-', '_')
-        pattern = os.path.join(BASE_DIR, f"Y*_*Q_{safe_model}.xlsx")
-        files = [f for f in glob.glob(pattern) if f.endswith(f"_{safe_model}.xlsx")]
-        old_file = os.path.join(BASE_DIR, f"{model_name}.xlsx")
-        if os.path.exists(old_file) and old_file not in files:
-            files.append(old_file)
+        pattern = os.path.join(DATA_DIR, "* data", f"*_3P12S_{model_name}.xlsx")
+        files = glob.glob(pattern)
+        old_pattern = os.path.join(BASE_DIR, f"Y*_*Q_{model_name.replace('-', '_')}.xlsx")
+        files.extend(glob.glob(old_pattern))
         files.sort()
         return files
 
@@ -1337,6 +1368,9 @@ class QRScanStationApp:
         files = self.get_all_model_files(model_name)
         if not files:
             return
+
+        today_dt = datetime.now().date()
+        cutoff_date_str = (today_dt - timedelta(days=7)).strftime("%Y-%m-%d")
 
         def _loader():
             try:
@@ -1367,25 +1401,15 @@ class QRScanStationApp:
                     for row in ws.iter_rows(min_row=2, values_only=True):
                         if not row or len(row) < 7:
                             continue
-                        
-                        if len(row) >= 8:
-                            pallet_val = str(row[0]).strip().upper() if row[0] and str(row[0]).strip() != "-" else ""
-                            lbl_val = row[1]
-                            box_time = row[2]
-                            seq_val = row[3]
-                            dmc_val = row[4]
-                            dmc_time = row[5]
-                            res = row[6]
-                            content = row[7] if len(row) >= 8 and row[7] else ""
-                        else:
-                            pallet_val = ""
-                            lbl_val = row[0]
-                            box_time = row[1]
-                            seq_val = row[2]
-                            dmc_val = row[3]
-                            dmc_time = row[4]
-                            res = row[5]
-                            content = row[6] if len(row) >= 7 and row[6] else ""
+
+                        pallet_val = str(row[0]).strip().upper() if row[0] and str(row[0]).strip() != "-" else ""
+                        lbl_val = row[1]
+                        box_time = row[2]
+                        seq_val = row[3]
+                        dmc_val = row[4]
+                        dmc_time = row[5]
+                        res = row[6]
+                        content = row[7] if len(row) >= 8 and row[7] else ""
 
                         lbl_str = str(lbl_val).strip() if lbl_val and str(lbl_val).strip() != "-" else ""
                         dmc_str = str(dmc_val).strip() if dmc_val and str(dmc_val).strip() != "-" else ""
@@ -1399,14 +1423,16 @@ class QRScanStationApp:
                             t_parts = str(dmc_time if dmc_time and dmc_time != "-" else box_time).split()
                             d_val = t_parts[0] if len(t_parts) > 0 and "Done" not in dmc_str else ""
                             tm_val = t_parts[1] if len(t_parts) > 1 and "Done" not in dmc_str else ""
-                            rows_to_insert.append((pallet_val, d_val, tm_val, "", dmc_str, res_str, content_str))
+                            if d_val >= cutoff_date_str:
+                                rows_to_insert.append((pallet_val, d_val, tm_val, "", dmc_str, res_str, content_str))
                             continue
 
                         if seq_val == "HEADER" or dmc_str.startswith("[박스 묶음 완료") or "Group" in dmc_str or "Pakiet" in dmc_str:
                             t_parts = str(box_time).split()
                             day_val = t_parts[0] if len(t_parts) > 0 else ""
                             time_val = t_parts[1] if len(t_parts) > 1 else ""
-                            rows_to_insert.append((pallet_val, day_val, time_val, lbl_str, dmc_str, res_str, content_str))
+                            if day_val >= cutoff_date_str:
+                                rows_to_insert.append((pallet_val, day_val, time_val, lbl_str, dmc_str, res_str, content_str))
                             if lbl_str:
                                 self.scanned_label_by_model[model_name].add(lbl_str)
                             last_label = ""
@@ -1440,7 +1466,8 @@ class QRScanStationApp:
                         if clean_dmc and clean_dmc.startswith(target_upper):
                             self.scanned_history_by_model[model_name].add(clean_dmc)
 
-                        rows_to_insert.append((pallet_val, day_val, time_val, final_label, dmc_str, res_str, content_str))
+                        if day_val >= cutoff_date_str:
+                            rows_to_insert.append((pallet_val, day_val, time_val, final_label, dmc_str, res_str, content_str))
 
                     hide_file(filepath)
 
@@ -1489,6 +1516,7 @@ class QRScanStationApp:
             return
 
         if self.active_popup:
+            self.play_triple_beep()
             return
 
         now = datetime.now()
@@ -1527,18 +1555,21 @@ class QRScanStationApp:
             prev_pallet = self.pallet_state[curr_model]["current_pallet"]
             curr_box_count = self.pallet_state[curr_model]["box_count"]
 
-            if (prev_pallet and curr_box_count == 0) or (upper_pallet_code in self.scanned_pallet_by_model[curr_model]):
-                self.set_status("Pallet NG", "#dc3545", "#3a1c1f")
-                self.open_lock_popup(
-                    title_text=self.t("ng_pallet_dup_title"),
-                    msg=self.t("ng_pallet_dup_msg"),
-                    header_bg="#2d1d20", header_fg="#f87171"
-                )
-                return
+            # [RE-WORK] RE-WORK 모드에서는 기존 등록된 Pallet QR 재스캔 허용
+            if not self.is_rework_mode:
+                if (prev_pallet and curr_box_count == 0) or (upper_pallet_code in self.scanned_pallet_by_model[curr_model]):
+                    self.set_status("Pallet NG", "#dc3545", "#3a1c1f")
+                    self.open_lock_popup(
+                        title_text=self.t("ng_pallet_dup_title"),
+                        msg=self.t("ng_pallet_dup_msg"),
+                        header_bg="#2d1d20", header_fg="#f87171"
+                    )
+                    return
 
+            content_tag = "RE-WORK" if self.is_rework_mode else ""
             if prev_pallet and curr_box_count >= 1:
-                self.direct_append_pallet_header(curr_model, prev_pallet, "Final HEADER", "[Pallet Grouping Done]", timestamp_full, include_time=False)
-                self.tree.insert("", 0, values=(prev_pallet, "", "", "", "[Pallet Grouping Done]", "OK", ""), tags=("pallet_row",))
+                self.direct_append_pallet_header(curr_model, prev_pallet, "Final HEADER", "[Pallet Grouping Done]", timestamp_full, include_time=False, content_text=content_tag)
+                self.tree.insert("", 0, values=(prev_pallet, "", "", "", "[Pallet Grouping Done]", "OK", content_tag), tags=("pallet_row",))
 
             self.pallet_state[curr_model]["current_pallet"] = upper_pallet_code
             self.pallet_state[curr_model]["box_count"] = 0
@@ -1546,17 +1577,17 @@ class QRScanStationApp:
             self.save_pallet_state()
             self.update_pallet_status_ui()
 
-            self.direct_append_pallet_header(curr_model, upper_pallet_code, "Final HEADER", "[Pallet Grouping Start]", timestamp_full, include_time=True)
-            self.tree.insert("", 0, values=(upper_pallet_code, day_str, time_str, "", "[Pallet Grouping Start]", "OK", ""), tags=("pallet_row",))
+            start_tag = "[Pallet Grouping Start - REWORK]" if self.is_rework_mode else "[Pallet Grouping Start]"
+            self.direct_append_pallet_header(curr_model, upper_pallet_code, "Final HEADER", start_tag, timestamp_full, include_time=True, content_text=content_tag)
+            self.tree.insert("", 0, values=(upper_pallet_code, day_str, time_str, "", start_tag, "OK", content_tag), tags=("pallet_row",))
 
-            self.close_pallet_wait_popup()
             self.refresh_grouping_tab()
             self.set_status("OK", "#28a745", "#193322")
             return
 
-        # 12박스(120개) 완료 시 Pallet QR 미스캔 상태에서 단품/Label 스캔 차단
+        # 12박스 완료 상태에서 새 Pallet QR 없이 단품 DMC나 Label QR을 바로 스캔할 경우 차단 (RE-WORK 제외)
         curr_box_cnt = self.pallet_state[curr_model]["box_count"]
-        if self.pallet_qr_feature_enabled and curr_box_cnt >= MAX_BOXES_PER_PALLET:
+        if not self.is_rework_mode and self.pallet_qr_feature_enabled and curr_box_cnt >= MAX_BOXES_PER_PALLET:
             self.set_status("Pallet NG", "#dc3545", "#3a1c1f")
             self.open_lock_popup(
                 title_text=self.t("ng_pallet_limit_title"),
@@ -1588,13 +1619,15 @@ class QRScanStationApp:
 
         if not is_label_qr and clean_upper_code in self.sorting_list_by_model[curr_model]:
             self.set_status("SORTING", "#f59f00", "#3d2716")
-            self.direct_mark_sorting_ok(curr_model, raw_code)
             self.open_sorting_popup(raw_code)
             return
 
+        # ==========================================
         # Label QR 처리
+        # ==========================================
         if is_label_qr:
-            if raw_code in self.scanned_label_by_model[curr_model]:
+            # [RE-WORK] RE-WORK 모드에서는 기존 Label QR 중복 스캔 허용
+            if not self.is_rework_mode and raw_code in self.scanned_label_by_model[curr_model]:
                 self.set_status("Label QR NG", "#dc3545", "#3a1c1f")
                 self.open_lock_popup(
                     title_text=self.t("ng_label_dup_title"),
@@ -1610,6 +1643,7 @@ class QRScanStationApp:
 
             current_scanned_qty = len(self.pending_items)
 
+            # [수량 검증] RE-WORK 모드에서도 스캔한 단품 수량과 라벨 표기 수량이 일치해야 함
             if expected_qty is not None and expected_qty != current_scanned_qty:
                 self.set_status("Grouping NG", "#dc3545", "#3a1c1f")
                 self.open_lock_popup(
@@ -1619,7 +1653,6 @@ class QRScanStationApp:
                 )
                 return
 
-            # 미그룹 목록 내 NG(중복 자재 등) 포함 시 박스 묶음 차단
             has_ng_item = any(item.get("result") == "NG" for item in self.pending_items)
             if has_ng_item:
                 self.set_status("NG BLOCK", "#dc3545", "#3a1c1f")
@@ -1634,17 +1667,18 @@ class QRScanStationApp:
 
             self.scanned_label_by_model[curr_model].add(raw_code)
             cur_pallet = self.pallet_state[curr_model]["current_pallet"]
+            content_tag = "RE-WORK" if self.is_rework_mode else ""
 
             for t_id in self.pending_tree_ids:
                 curr_vals = self.tree.item(t_id, "values")
                 if curr_vals:
-                    self.tree.item(t_id, values=(cur_pallet, curr_vals[1], curr_vals[2], raw_code, curr_vals[4], curr_vals[5], curr_vals[6]))
+                    self.tree.item(t_id, values=(cur_pallet, curr_vals[1], curr_vals[2], raw_code, curr_vals[4], curr_vals[5], content_tag))
 
             items_to_bundle = list(self.pending_items)
             bundle_count = len(items_to_bundle)
-            header_text = self.t("box_complete", count=bundle_count)
+            header_text = f"[Box Grouping Done: {bundle_count} pcs]"
 
-            self.tree.insert("", 0, values=(cur_pallet, day_str, time_str, raw_code, header_text, "OK", ""))
+            self.tree.insert("", 0, values=(cur_pallet, day_str, time_str, raw_code, header_text, "OK", content_tag))
 
             self.pending_items.clear()
             self.pending_tree_ids.clear()
@@ -1656,15 +1690,22 @@ class QRScanStationApp:
 
             self.root.update_idletasks()
 
-            self.direct_finalize_excel_group(curr_model, cur_pallet, raw_code, timestamp_full, items_to_bundle, header_text)
+            self.direct_finalize_excel_group(curr_model, cur_pallet, raw_code, timestamp_full, items_to_bundle, header_text, content_text=content_tag)
             self.refresh_grouping_tab()
+
+            # [신규 기능 1] 1개의 Label QR 스캔 묶음 완료 시 RE-WORK 모드 자동 종료
+            if self.is_rework_mode:
+                self.is_rework_mode = False
+                self.btn_manager.config(bg="#2c323d", fg="#adb5bd", text=self.t("manager_btn"))
+                messagebox.showinfo("RE-WORK 완료", "RE-WORK 묶음 처리가 완료되어 일반 작업 모드로 자동 전환되었습니다.", parent=self.root)
 
             if self.pallet_state[curr_model]["box_count"] >= MAX_BOXES_PER_PALLET:
                 self.pallet_qr_feature_enabled = True
                 self.update_pallet_status_ui()
-                self.open_pallet_wait_popup()
 
+        # ==========================================
         # 단품 DMC 처리
+        # ==========================================
         if not is_label_qr:
             if len(self.pending_items) >= MAX_ITEMS_PER_BOX:
                 self.set_status("NG", "#dc3545", "#3a1c1f")
@@ -1676,8 +1717,27 @@ class QRScanStationApp:
                 return
 
             is_already_scanned = (clean_upper_code in self.scanned_history_by_model[curr_model])
+            cur_p = self.pallet_state[curr_model]["current_pallet"]
 
-            if self.is_manager_mode:
+            # [RE-WORK 모드]: 기존 등록된 단품 재스캔을 전면 허용하고 Content에 RE-WORK 기재
+            if self.is_rework_mode:
+                self.set_status("OK", "#28a745", "#193322")
+                item_data = {
+                    "pallet": cur_p,
+                    "day": day_str,
+                    "time": time_str,
+                    "code": raw_code,
+                    "result": "OK",
+                    "content": "RE-WORK"
+                }
+                self.pending_items.append(item_data)
+                item_id = self.tree.insert("", 0, values=(cur_p, day_str, time_str, "", raw_code, "OK", "RE-WORK"))
+                self.pending_tree_ids.append(item_id)
+                self.lbl_pending_status.config(text=self.t("pending_status", count=len(self.pending_items)))
+                self.direct_append_single_item(curr_model, item_data, content_text="RE-WORK")
+                return
+
+            elif self.is_manager_mode:
                 if not is_already_scanned:
                     self.set_status("NG", "#dc3545", "#3a1c1f")
                     self.open_lock_popup(
@@ -1688,16 +1748,16 @@ class QRScanStationApp:
                     return
                 else:
                     self.set_status("OK", "#28a745", "#193322")
-                    cur_p = self.pallet_state[curr_model]["current_pallet"]
                     item_data = {
                         "pallet": cur_p,
                         "day": day_str,
                         "time": time_str,
                         "code": raw_code,
-                        "result": "OK"
+                        "result": "OK",
+                        "content": "[DMC 재스캔]"
                     }
                     self.tree.insert("", 0, values=(cur_p, day_str, time_str, "", raw_code, "OK", "[DMC 재스캔]"))
-                    self.direct_append_single_item(curr_model, item_data)
+                    self.direct_append_single_item(curr_model, item_data, content_text="[DMC 재스캔]")
                     self.is_manager_mode = False
                     self.btn_manager.config(bg="#2c323d", fg="#adb5bd", text=self.t("manager_btn"))
                     return
@@ -1711,7 +1771,6 @@ class QRScanStationApp:
 
                     self.set_status("QR NG", "#fd7e14", "#3d2716")
 
-                    cur_p = self.pallet_state[curr_model]["current_pallet"]
                     dup_text = self.t("dup_scan_tag")
                     self.tree.insert("", 0, values=(cur_p, day_str, time_str, "-", raw_code, "NG", dup_text), tags=("ng_row",))
 
@@ -1763,7 +1822,8 @@ class QRScanStationApp:
                 "day": day_str,
                 "time": time_str,
                 "code": raw_code,
-                "result": "OK"
+                "result": "OK",
+                "content": ""
             }
             self.pending_items.append(item_data)
             
@@ -1832,11 +1892,10 @@ class QRScanStationApp:
 
         return wb, ws
 
-    def direct_append_pallet_header(self, model_name, pallet_code, seq_val, text_val, timestamp_full, include_time=True):
+    def direct_append_pallet_header(self, model_name, pallet_code, seq_val, text_val, timestamp_full, include_time=True, content_text=""):
         with self.file_lock:
             try:
-                filename = get_quarter_filename(model_name)
-                filepath = os.path.join(BASE_DIR, filename)
+                _, filepath = get_month_folder_and_filepath(model_name)
                 wb, ws = self.open_or_init_workbook(filepath)
 
                 thin_border = Border(
@@ -1849,7 +1908,7 @@ class QRScanStationApp:
                 fill_to_use = start_fill if "Start" in text_val else done_fill
                 ts_record = timestamp_full if include_time else "-"
                 
-                row_data = [pallet_code, "-", ts_record, seq_val, text_val, ts_record, "OK", ""]
+                row_data = [pallet_code, "-", ts_record, seq_val, text_val, ts_record, "OK", content_text]
                 ws.append(row_data)
                 h_idx = ws.max_row
                 for col in range(1, 9):
@@ -1863,11 +1922,10 @@ class QRScanStationApp:
             except Exception:
                 pass
 
-    def direct_append_single_item(self, model_name, item):
+    def direct_append_single_item(self, model_name, item, content_text=""):
         with self.file_lock:
             try:
-                filename = get_quarter_filename(model_name)
-                filepath = os.path.join(BASE_DIR, filename)
+                _, filepath = get_month_folder_and_filepath(model_name)
                 wb, ws = self.open_or_init_workbook(filepath)
 
                 thin_border = Border(
@@ -1878,7 +1936,7 @@ class QRScanStationApp:
 
                 start_row = ws.max_row + 1
                 ts_full = f"{item['day']} {item['time']}"
-                row_data = [item.get("pallet", ""), "-", "-", "-", item["code"], ts_full, item["result"], ""]
+                row_data = [item.get("pallet", ""), "-", "-", "-", item["code"], ts_full, item["result"], content_text]
                 ws.append(row_data)
 
                 for col in range(1, 9):
@@ -1893,11 +1951,10 @@ class QRScanStationApp:
             except Exception:
                 pass
 
-    def direct_finalize_excel_group(self, model_name, pallet_code, box_qr, box_time, items, header_text):
+    def direct_finalize_excel_group(self, model_name, pallet_code, box_qr, box_time, items, header_text, content_text=""):
         with self.file_lock:
             try:
-                filename = get_quarter_filename(model_name)
-                filepath = os.path.join(BASE_DIR, filename)
+                _, filepath = get_month_folder_and_filepath(model_name)
                 wb, ws = self.open_or_init_workbook(filepath)
 
                 item_codes = set(it["code"].strip().upper() for it in items)
@@ -1908,6 +1965,8 @@ class QRScanStationApp:
                         row[0].value = pallet_code
                         row[1].value = box_qr
                         row[2].value = box_time
+                        if content_text:
+                            row[7].value = content_text
                         item_codes.remove(dmc_val)
                     if not item_codes:
                         break
@@ -1917,7 +1976,7 @@ class QRScanStationApp:
                     top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9')
                 )
 
-                header_row = [pallet_code, box_qr, box_time, "HEADER", header_text, box_time, "OK", ""]
+                header_row = [pallet_code, box_qr, box_time, "HEADER", header_text, box_time, "OK", content_text]
                 ws.append(header_row)
                 h_row_idx = ws.max_row
                 for col in range(1, 9):
@@ -1935,9 +1994,9 @@ class QRScanStationApp:
             try:
                 clean_target = raw_code.strip().upper()
                 files = self.get_all_model_files(model_name)
-                current_quarter_file = os.path.join(BASE_DIR, get_quarter_filename(model_name))
-                if current_quarter_file not in files:
-                    files.append(current_quarter_file)
+                _, current_month_file = get_month_folder_and_filepath(model_name)
+                if current_month_file not in files:
+                    files.append(current_month_file)
 
                 ng_fill = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
                 ng_font = Font(name="맑은 고딕", size=10, bold=True, color="C00000")
@@ -1984,7 +2043,7 @@ class QRScanStationApp:
                         wb.save(f_path)
                     hide_file(f_path)
 
-                wb_cur, ws_cur = self.open_or_init_workbook(current_quarter_file)
+                wb_cur, ws_cur = self.open_or_init_workbook(current_month_file)
                 ts_full = f"{day_str} {time_str}"
                 row_data = [pallet_code, "-", "-", "-", raw_code, ts_full, "NG", dup_text]
                 ws_cur.append(row_data)
@@ -1996,8 +2055,8 @@ class QRScanStationApp:
                     c.font = ng_font
                     c.alignment = Alignment(horizontal="center" if col in [3, 4, 6, 7, 8] else "left", vertical="center")
 
-                wb_cur.save(current_quarter_file)
-                hide_file(current_quarter_file)
+                wb_cur.save(current_month_file)
+                hide_file(current_month_file)
             except Exception:
                 pass
 
@@ -2073,25 +2132,15 @@ class QRScanStationApp:
                 for row in ws.iter_rows(min_row=2, values_only=True):
                     if not row or len(row) < 7:
                         continue
-                    
-                    if len(row) >= 8:
-                        pallet_val = str(row[0]).strip().upper() if row[0] and str(row[0]).strip() != "-" else ""
-                        label_qr = row[1]
-                        box_time = row[2]
-                        seq_val = row[3]
-                        dmc_code = row[4]
-                        dmc_time = row[5]
-                        res = row[6]
-                        content = row[7] if len(row) >= 8 and row[7] else ""
-                    else:
-                        pallet_val = ""
-                        label_qr = row[0]
-                        box_time = row[1]
-                        seq_val = row[2]
-                        dmc_code = row[3]
-                        dmc_time = row[4]
-                        res = row[5]
-                        content = row[6] if len(row) >= 7 and row[6] else ""
+
+                    pallet_val = str(row[0]).strip().upper() if row[0] and str(row[0]).strip() != "-" else ""
+                    label_qr = row[1]
+                    box_time = row[2]
+                    seq_val = row[3]
+                    dmc_code = row[4]
+                    dmc_time = row[5]
+                    res = row[6]
+                    content = row[7] if len(row) >= 8 and row[7] else ""
 
                     if label_qr and str(label_qr).strip() != "-":
                         last_known_label_qr = str(label_qr).strip()
@@ -2197,7 +2246,7 @@ class QRScanStationApp:
             pass
 
     def open_lock_popup(self, title_text, msg, header_bg, header_fg):
-        self.play_alarm_sound()
+        self.start_looping_ng_alarm()
 
         dialog = tk.Toplevel(self.root)
         dialog.title(title_text)
@@ -2223,12 +2272,14 @@ class QRScanStationApp:
 
         def unlock(event=None):
             if pw_entry.get() == self.admin_password:
+                self.stop_looping_ng_alarm()
                 dialog.grab_release()
                 dialog.destroy()
                 self.active_popup = None
                 self.set_status("READY", "#adb5bd", "#2a2e37")
                 self.scan_entry.focus_set()
             else:
+                self.play_triple_beep()
                 lbl_err.config(text=self.t("pw_err"))
                 pw_entry.delete(0, tk.END)
 
