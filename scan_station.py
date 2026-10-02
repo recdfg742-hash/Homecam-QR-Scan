@@ -34,22 +34,22 @@ SINGLE_INSTANCE_MUTEX = None
 if os.name == 'nt':
     try:
         kernel32 = ctypes.windll.kernel32
-        MUTEX_NAME = "Aluko_Front_QR_Reader_Mutex"
+        MUTEX_NAME = "Aluko_Rear_QR_Reader_Mutex"
         SINGLE_INSTANCE_MUTEX = kernel32.CreateMutexW(None, False, MUTEX_NAME)
         if kernel32.GetLastError() == 183:
             root_temp = tk.Tk()
             root_temp.withdraw()
-            messagebox.showwarning("중복 실행 경고", "이미 Aluko_Front_QR Reader 프로그램이 실행 중입니다.")
+            messagebox.showwarning("중복 실행 경고", "이미 Aluko_Rear_QR Reader 프로그램이 실행 중입니다.")
             sys.exit(0)
     except Exception:
         pass
 
 # ==========================================
-# 2. FRONT 모델 설정
+# 2. REAR 모델 설정 (정식 AD 코드)
 # ==========================================
 MODEL_CONFIG = {
-    'S-FRONT': 'MPL02916AD',
-    'R-FRONT': 'MPL02926AD'
+    'S-REAR': 'MPL02914AD',
+    'R-REAR': 'MPL02925AD'
 }
 
 CODE_TO_MODEL = {v: k for k, v in MODEL_CONFIG.items()}
@@ -64,9 +64,9 @@ def get_base_dir():
 
 BASE_DIR = get_base_dir()
 DATA_DIR = os.path.join(BASE_DIR, "data")
-COUNT_FILE = os.path.join(BASE_DIR, "counts_front.json")
-STATE_FILE = os.path.join(BASE_DIR, "pallet_state_front.json")
-CAPTURE_BASE_DIR = os.path.join(BASE_DIR, "captures_front")
+COUNT_FILE = os.path.join(BASE_DIR, "counts_rear.json")
+STATE_FILE = os.path.join(BASE_DIR, "pallet_state_rear.json")
+CAPTURE_BASE_DIR = os.path.join(BASE_DIR, "captures_rear")
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(CAPTURE_BASE_DIR, exist_ok=True)
 
@@ -103,7 +103,7 @@ def sanitize_filename(name):
 
 LANG_PACK = {
     "한국어": {
-        "title": "Aluko_Front_QR Reader",
+        "title": "Aluko_Rear_QR Reader",
         "pw_setting": "⚙ 비밀번호 설정",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -138,7 +138,7 @@ LANG_PACK = {
         "sorting_msg": "[알림: Sorting 필요 제품]\n\nDMC Code: {code}\n\n해당 제품은 Sorting 대상 리스트에 등록되어 있습니다.\n바코드를 별도로 격리한 뒤 [Enter] 키를 누르세요.",
         "ng_model_title": "⚠️ NG - 모델 불일치",
         "ng_model_msg": "[NG: 선택 모델과 바코드 코드가 일치하지 않습니다]\n\n현재 선택 모델: {model} ({target})\n스캔된 코드: {code}\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
-        "ng_pallet_model_title": "⚠️️ NG - Pallet QR 모델 불일치",
+        "ng_pallet_model_title": "⚠️ NG - Pallet QR 모델 불일치",
         "ng_pallet_model_msg": "[NG: Pallet QR 모델 코드가 일치하지 않습니다]\n\n현재 선택 모델: {model} ({target})\n스캔 Pallet QR: {code}\n\n올바른 Pallet QR을 준비한 뒤 관리자 비밀번호로 해제하세요.",
         "ng_pallet_dup_title": "🚫 NG - Pallet QR 중복/순서 오류",
         "ng_pallet_dup_msg": "[NG: Pallet QR 중복 리딩 또는 박스 미완료]\n\n1) 최소 1개 이상의 박스를 완료한 후에만 팔레트 교체가 가능합니다.\n2) 이미 사용된 Pallet QR은 중복 등록할 수 없습니다.\n\n관리자 비밀번호를 입력하여 해제하세요.",
@@ -163,7 +163,7 @@ LANG_PACK = {
         "cam_ng_msg": "[CAM NG 발생]\n\n외장 USB 웹캠 연결이 끊어졌거나 영상이 수신되지 않습니다.\nUSB 케이블을 다시 연결하세요."
     },
     "English": {
-        "title": "Aluko_Front_QR Reader",
+        "title": "Aluko_Rear_QR Reader",
         "pw_setting": "⚙ Password Setting",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -204,11 +204,11 @@ LANG_PACK = {
         "ng_pallet_dup_msg": "[NG: Pallet QR duplicate reading or incomplete box]\n\n1) Pallet change is allowed only after completing at least 1 box.\n2) Used Pallet QR cannot be registered again.\n\nEnter admin password to unlock.",
         "ng_label_dup_title": "⚠️ Label QR NG - Duplicate Scan",
         "ng_label_dup_msg": "[Label QR NG: Already used Label QR]\n\nScanned Label QR: {code}...\nAlready registered/packed duplicate label.\n\nEnter 6-digit admin password to unlock.",
-        "ng_group_title": "⚠️️ Grouping NG - Quantity Mismatch",
+        "ng_group_title": "⚠️ Grouping NG - Quantity Mismatch",
         "ng_group_msg": "[Grouping NG: Item qty and Label packed qty mismatch]\n\nLabel QR Specified Qty: {expected}\nCurrent Scanned Item Qty: {current}\n\nQuantities do not match. Cannot proceed grouping.\nEnter 6-digit admin password to unlock.",
         "ng_limit_title": "⚠️ NG - Label QR Missing",
         "ng_limit_msg": "[NG Occurred: Label QR Missing]\n\nAll {max_cnt} items have already been scanned.\nThe 11th item will not be recorded.\nScan Label QR first to complete box grouping.\n\nEnter 6-digit admin password to unlock.",
-        "ng_mgr_err_title": "⚠️️ NG - Manager Mode Error",
+        "ng_mgr_err_title": "⚠️ NG - Manager Mode Error",
         "ng_mgr_err_msg": "[NG: New barcodes must be scanned in general mode]\n\nScanned Barcode: {code}\nOnly already registered barcodes can be re-entered in duplicate rescan mode.\n\nEnter 6-digit admin password to unlock.",
         "ng_dup_title": "🚫 QR NG - Duplicate Barcode Detected",
         "ng_dup_msg": "[QR NG Occurred: Already scanned barcode]\n\nScanned Barcode: {code}\nThis item and connected box header have been changed to NG.\n\nEnter 6-digit admin password to unlock.",
@@ -223,7 +223,7 @@ LANG_PACK = {
         "cam_ng_msg": "[CAM NG Occurred]\n\nExternal USB webcam is disconnected or frame is missing.\nPlease reconnect the USB cable."
     },
     "Polski": {
-        "title": "Aluko_Front_QR Reader",
+        "title": "Aluko_Rear_QR Reader",
         "pw_setting": "⚙ Ustawienia hasła",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -256,7 +256,7 @@ LANG_PACK = {
         "dup_scan_tag": "[Duplikat skanu]",
         "sorting_title": "⚠️ Ostrzeżenie - Wymagane sortowanie",
         "sorting_msg": "[Uwaga: Przedmiot do sortowania]\n\nDMC Code: {code}\n\nTen przedmiot znajduje się na liście docelowej sortowania.\nOdizoluj kod kreskowy i naciśnij [Enter].",
-        "ng_model_title": "⚠️ NG - Niezgodność modelu",
+        "ng_model_title": "⚠️️ NG - Niezgodność modelu",
         "ng_model_msg": "[NG: Wybrany model i kod kreskowy nie pasują do siebie]\n\nObecny Model: {model} ({target})\nZeskanowany Kod: {code}\n\nWprowadź 6-cyfrowe hasło administratora.",
         "ng_pallet_model_title": "⚠️ NG - Niezgodność modelu Pallet QR",
         "ng_pallet_model_msg": "[NG: Kod modelu Pallet QR nie pasuje]\n\nObecny Model: {model} ({target})\nZeskanowana Palleta: {code}\n\nPrzygotuj właściwy Pallet QR i odblokuj hasłem.",
@@ -295,18 +295,18 @@ ACCENT_YELLOW = "#f59f00"
 class QRScanStationApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Aluko_Front_QR Reader")
+        self.root.title("Aluko_Rear_QR Reader")
         self.root.geometry("1440x880")
         self.root.minsize(1280, 780)
         self.root.configure(bg=BG_MAIN)
 
         self.current_lang = tk.StringVar(value="한국어")
-        self.current_model = tk.StringVar(value='S-FRONT')
+        self.current_model = tk.StringVar(value='S-REAR')
         self.admin_password = DEFAULT_PASSWORD
         self.model_session_id = 0
 
         self.is_manager_mode = False
-        self.is_rework_mode = False  # [신규 기능 1] RE-WORK 모드 플래그
+        self.is_rework_mode = False
         self.pallet_qr_feature_enabled = True  
 
         self.cap = None
@@ -387,7 +387,7 @@ class QRScanStationApp:
         self.alarm_thread_running = False
 
     def find_and_open_camera(self):
-        search_order = [1, 2, 3]  # 내장 카메라(0번) 원천 차단
+        search_order = [1, 2, 3]  # 내장 0번 카메라 제외
         for idx in search_order:
             cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
             if not cap.isOpened():
@@ -547,7 +547,7 @@ class QRScanStationApp:
 
         selected_items = self.tree.selection()
         if not selected_items:
-            messagebox.showwarning("선택 없음", "삭제할 기록 행을 [FRONT 기록] 테이블에서 마우스로 먼저 선택해 주세요.", parent=self.root)
+            messagebox.showwarning("선택 없음", "삭제할 기록 행을 [REAR 기록] 테이블에서 마우스로 먼저 선택해 주세요.", parent=self.root)
             self.scan_entry.focus_set()
             return
 
@@ -706,7 +706,7 @@ class QRScanStationApp:
                          font=("맑은 고딕", 10, "bold"), relief="flat", pady=6, cursor="hand2")
         btn1.pack(fill=tk.X, padx=30, pady=4)
 
-        # [신규 기능 1] RE-WORK 모드 활성화 버튼
+        # RE-WORK 모드 활성화 버튼
         def act_activate_rework():
             self.is_rework_mode = True
             self.is_manager_mode = False
@@ -737,7 +737,7 @@ class QRScanStationApp:
 
         btn2 = tk.Button(dialog, text=f"📦 Pallet QR 리딩 기능 토글 [{status_txt}]", command=act_toggle_pallet_qr,
                          bg=btn_color, fg="#ffffff", activebackground="#475569", activeforeground="#ffffff",
-                         font=("맑은 고딕", 10, "bold"), relief="flat", pady=6, cursor="hand2")
+                         font=("맑은 고딕", 10, "bold"), relief="flat", pady=8, cursor="hand2")
         btn2.pack(fill=tk.X, padx=30, pady=4)
 
     def load_model_counts(self):
@@ -822,7 +822,7 @@ class QRScanStationApp:
         header_frame = tk.Frame(self.root, bg=BG_MAIN, height=45)
         header_frame.pack(fill=tk.X, padx=20, pady=(10, 4))
 
-        tk.Label(header_frame, text="Aluko_Front_QR Reader", font=("Arial", 12, "bold"), 
+        tk.Label(header_frame, text="Aluko_Rear_QR Reader", font=("Arial", 12, "bold"), 
                  fg=TEXT_COLOR, bg=BG_MAIN).pack(side=tk.LEFT, padx=(0, 15))
 
         self.model_combo = ttk.Combobox(
@@ -1334,6 +1334,40 @@ class QRScanStationApp:
         y = ry + (rh - height) // 2
         dialog.geometry(f"{width}x{height}+{max(0, x)}+{max(0, y)}")
 
+    def open_sorting_popup(self, dmc_code):
+        dialog = tk.Toplevel(self.root)
+        dialog.title(self.t("sorting_title"))
+        dialog.resizable(False, False)
+        dialog.configure(bg="#3a1c1f")
+
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        self.center_popup(dialog, 520, 300)
+        self.active_popup = dialog
+
+        self.play_triple_beep()
+
+        msg = self.t("sorting_msg", code=dmc_code)
+        tk.Label(dialog, text=msg, font=("맑은 고딕", 11, "bold"), bg="#3a1c1f", fg="#ff6b6b", justify=tk.LEFT).pack(pady=25, padx=20)
+
+        def close_dialog(event=None):
+            dialog.grab_release()
+            dialog.destroy()
+            self.active_popup = None
+            self.set_status("READY", "#adb5bd", "#2a2e37")
+            self.scan_entry.focus_set()
+
+        dialog.bind("<Return>", close_dialog)
+        dialog.bind("<KP_Enter>", close_dialog)
+
+        btn = tk.Button(dialog, text=self.t("confirm_btn"), command=close_dialog,
+                        font=("맑은 고딕", 11, "bold"), bg="#dc3545", fg="#ffffff",
+                        relief="flat", padx=20, pady=6, cursor="hand2")
+        btn.pack(pady=10)
+        btn.focus_set()
+
     def on_model_changed(self, event=None):
         self.model_session_id += 1
         current_session = self.model_session_id
@@ -1555,7 +1589,6 @@ class QRScanStationApp:
             prev_pallet = self.pallet_state[curr_model]["current_pallet"]
             curr_box_count = self.pallet_state[curr_model]["box_count"]
 
-            # [RE-WORK] RE-WORK 모드에서는 기존 등록된 Pallet QR 재스캔 허용
             if not self.is_rework_mode:
                 if (prev_pallet and curr_box_count == 0) or (upper_pallet_code in self.scanned_pallet_by_model[curr_model]):
                     self.set_status("Pallet NG", "#dc3545", "#3a1c1f")
@@ -1585,7 +1618,6 @@ class QRScanStationApp:
             self.set_status("OK", "#28a745", "#193322")
             return
 
-        # 12박스 완료 상태에서 새 Pallet QR 없이 단품 DMC나 Label QR을 바로 스캔할 경우 차단 (RE-WORK 제외)
         curr_box_cnt = self.pallet_state[curr_model]["box_count"]
         if not self.is_rework_mode and self.pallet_qr_feature_enabled and curr_box_cnt >= MAX_BOXES_PER_PALLET:
             self.set_status("Pallet NG", "#dc3545", "#3a1c1f")
@@ -1626,7 +1658,6 @@ class QRScanStationApp:
         # Label QR 처리
         # ==========================================
         if is_label_qr:
-            # [RE-WORK] RE-WORK 모드에서는 기존 Label QR 중복 스캔 허용
             if not self.is_rework_mode and raw_code in self.scanned_label_by_model[curr_model]:
                 self.set_status("Label QR NG", "#dc3545", "#3a1c1f")
                 self.open_lock_popup(
@@ -1643,7 +1674,6 @@ class QRScanStationApp:
 
             current_scanned_qty = len(self.pending_items)
 
-            # [수량 검증] RE-WORK 모드에서도 스캔한 단품 수량과 라벨 표기 수량이 일치해야 함
             if expected_qty is not None and expected_qty != current_scanned_qty:
                 self.set_status("Grouping NG", "#dc3545", "#3a1c1f")
                 self.open_lock_popup(
@@ -1693,7 +1723,6 @@ class QRScanStationApp:
             self.direct_finalize_excel_group(curr_model, cur_pallet, raw_code, timestamp_full, items_to_bundle, header_text, content_text=content_tag)
             self.refresh_grouping_tab()
 
-            # [신규 기능 1] 1개의 Label QR 스캔 묶음 완료 시 RE-WORK 모드 자동 종료
             if self.is_rework_mode:
                 self.is_rework_mode = False
                 self.btn_manager.config(bg="#2c323d", fg="#adb5bd", text=self.t("manager_btn"))
@@ -1719,7 +1748,6 @@ class QRScanStationApp:
             is_already_scanned = (clean_upper_code in self.scanned_history_by_model[curr_model])
             cur_p = self.pallet_state[curr_model]["current_pallet"]
 
-            # [RE-WORK 모드]: 기존 등록된 단품 재스캔을 전면 허용하고 Content에 RE-WORK 기재
             if self.is_rework_mode:
                 self.set_status("OK", "#28a745", "#193322")
                 item_data = {
