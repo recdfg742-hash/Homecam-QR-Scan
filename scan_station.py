@@ -256,13 +256,13 @@ LANG_PACK = {
         "dup_scan_tag": "[Duplikat skanu]",
         "sorting_title": "⚠️ Ostrzeżenie - Wymagane sortowanie",
         "sorting_msg": "[Uwaga: Przedmiot do sortowania]\n\nDMC Code: {code}\n\nTen przedmiot znajduje się na liście docelowej sortowania.\nOdizoluj kod kreskowy i naciśnij [Enter].",
-        "ng_model_title": "⚠️️ NG - Niezgodność modelu",
+        "ng_model_title": "⚠️ NG - Niezgodność modelu",
         "ng_model_msg": "[NG: Wybrany model i kod kreskowy nie pasują do siebie]\n\nObecny Model: {model} ({target})\nZeskanowany Kod: {code}\n\nWprowadź 6-cyfrowe hasło administratora.",
         "ng_pallet_model_title": "⚠️ NG - Niezgodność modelu Pallet QR",
         "ng_pallet_model_msg": "[NG: Kod modelu Pallet QR nie pasuje]\n\nObecny Model: {model} ({target})\nZeskanowana Palleta: {code}\n\nPrzygotuj właściwy Pallet QR i odblokuj hasłem.",
         "ng_pallet_dup_title": "🚫 NG - Duplikat Pallet QR / Błąd kolejności",
         "ng_pallet_dup_msg": "[NG: Zduplikowany odczyt Pallet QR lub niedokończony box]\n\n1) Zmiana palety dozwolona po ukończeniu min. 1 boxu.\n2) Użyty Pallet QR nie może być zarejestrowany ponownie.\n\nWprowadź hasło administratora.",
-        "ng_label_dup_title": "⚠️ Label QR NG - Duplikat skanu",
+        "ng_label_dup_title": "⚠️️ Label QR NG - Duplikat skanu",
         "ng_label_dup_msg": "[Label QR NG: Już użyty Label QR]\n\nZeskanowany Label QR: {code}...\nEtykieta została już zarejestrowana/spakowana.\n\nWprowadź hasło administratora.",
         "ng_group_title": "⚠️ Grouping NG - Niezgodność ilości",
         "ng_group_msg": "[Grouping NG: Niezgodność ilości sztuk i etykiety]\n\nIlość z Label QR: {expected}\nObecna ilość sztuk: {current}\n\nIlości się nie zgadzają.\nWprowadź hasło administratora.",
@@ -386,20 +386,23 @@ class QRScanStationApp:
     def stop_looping_ng_alarm(self):
         self.alarm_thread_running = False
 
+    # [핵심 수정] 내장 웹캠을 끈 상태에서 외장 웹캠이 0번에 있든 1, 2번에 있든 자동 인식
     def find_and_open_camera(self):
-        search_order = [1, 2, 3]  # 내장 0번 카메라 제외
+        search_order = [1, 2, 0, 3]  # 1, 2번 우선 시도 후 없으면 0번(단독 외장캠), 3번 탐색
         for idx in search_order:
-            cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-            if not cap.isOpened():
-                cap = cv2.VideoCapture(idx)
-            if cap.isOpened():
-                ret, test_frame = cap.read()
-                if ret and test_frame is not None:
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-                    self.cam_index_used = idx
-                    return cap
-                cap.release()
+            for api_backend in [cv2.CAP_DSHOW, cv2.CAP_ANY]:
+                try:
+                    cap = cv2.VideoCapture(idx, api_backend)
+                    if cap.isOpened():
+                        ret, test_frame = cap.read()
+                        if ret and test_frame is not None and test_frame.size > 0:
+                            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                            self.cam_index_used = idx
+                            return cap
+                        cap.release()
+                except Exception:
+                    pass
         return None
 
     def start_usb_webcam_stream(self):
@@ -423,13 +426,13 @@ class QRScanStationApp:
                             self.root.after(0, lambda: self.lbl_cam_status.config(
                                 text="✕ 웹캠 연결 끊김 (재연결 시도 중...)", fg="#f87171"
                             ))
-                            if consecutive_fail_count >= 2:
+                            if consecutive_fail_count >= 3:
                                 self.root.after(0, self.open_cam_ng_popup)
                             time.sleep(1.0)
                             continue
 
                     ret, frame = self.cap.read()
-                    if ret and frame is not None:
+                    if ret and frame is not None and frame.size > 0:
                         self.current_webcam_frame = frame
                         consecutive_fail_count = 0
                         if self.cam_ng_popup_active:
@@ -437,11 +440,14 @@ class QRScanStationApp:
                     else:
                         consecutive_fail_count += 1
                         if self.cap:
-                            self.cap.release()
+                            try:
+                                self.cap.release()
+                            except Exception:
+                                pass
                         self.cap = None
                         self.is_camera_ready = False
                         gc.collect()
-                        if consecutive_fail_count >= 2:
+                        if consecutive_fail_count >= 3:
                             self.root.after(0, self.open_cam_ng_popup)
                         time.sleep(0.5)
                 else:
