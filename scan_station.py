@@ -148,7 +148,7 @@ LANG_PACK = {
         "ng_group_msg": "[Grouping NG: 단품 수량과 Label 포장 수량 불일치]\n\nLabel QR 지정 수량: {expected}개\n현재 스캔된 단품 수량: {current}개\n\n수량이 일치하지 않아 묶음을 진행할 수 없습니다.\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_limit_title": "⚠️ NG - Label QR 누락",
         "ng_limit_msg": "[NG 발생: Label QR 누락]\n\n단품이 이미 {max_cnt}개 모두 스캔되었습니다.\n11번째 단품은 기록되지 않습니다.\nLabel QR을 먼저 스캔하여 박스 묶음을 완료하십시오.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
-        "ng_mgr_err_title": "⚠️ NG - 관리자 모드 오류",
+        "ng_mgr_err_title": "⚠️️ NG - 관리자 모드 오류",
         "ng_mgr_err_msg": "[NG: 신규 바코드는 일반 모드에서 스캔해야 합니다]\n\n스캔 바코드: {code}\n중복 재스캔 모드에서는 이미 등록된 바코드만 재입력 가능합니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_dup_title": "🚫 QR NG - 중복 바코드 감지",
         "ng_dup_msg": "[QR NG 발생: 이미 스캔된 바코드입니다]\n\n스캔 바코드: {code}\n해당 제품 및 연결된 박스 헤더가 NG로 변경되었습니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
@@ -202,7 +202,7 @@ LANG_PACK = {
         "ng_pallet_model_msg": "[NG: Pallet QR model code does not match]\n\nCurrent Model: {model} ({target})\nScanned Pallet QR: {code}\n\nPrepare correct Pallet QR and unlock with admin password.",
         "ng_pallet_dup_title": "🚫 NG - Pallet QR Duplicate/Sequence Error",
         "ng_pallet_dup_msg": "[NG: Pallet QR duplicate reading or incomplete box]\n\n1) Pallet change is allowed only after completing at least 1 box.\n2) Used Pallet QR cannot be registered again.\n\nEnter admin password to unlock.",
-        "ng_label_dup_title": "⚠️️ Label QR NG - Duplicate Scan",
+        "ng_label_dup_title": "⚠️ Label QR NG - Duplicate Scan",
         "ng_label_dup_msg": "[Label QR NG: Already used Label QR]\n\nScanned Label QR: {code}...\nAlready registered/packed duplicate label.\n\nEnter 6-digit admin password to unlock.",
         "ng_group_title": "⚠️ Grouping NG - Quantity Mismatch",
         "ng_group_msg": "[Grouping NG: Item qty and Label packed qty mismatch]\n\nLabel QR Specified Qty: {expected}\nCurrent Scanned Item Qty: {current}\n\nQuantities do not match. Cannot proceed grouping.\nEnter 6-digit admin password to unlock.",
@@ -387,7 +387,7 @@ class QRScanStationApp:
         self.alarm_thread_running = False
 
     def find_and_open_camera(self):
-        search_order = [1, 2, 0, 3]  # 내장 카메라를 끈 경우 Windows가 외장캠을 0번으로 재할당하므로 0번도 포함 탐색
+        search_order = [1, 2, 0, 3]  # 내장 0번 카메라 끈 환경에서도 외장캠 자동 인식
         for idx in search_order:
             for api_backend in [cv2.CAP_DSHOW, cv2.CAP_ANY]:
                 try:
@@ -1752,6 +1752,7 @@ class QRScanStationApp:
             is_already_scanned = (clean_upper_code in self.scanned_history_by_model[curr_model])
             cur_p = self.pallet_state[curr_model]["current_pallet"]
 
+            # [RE-WORK 모드]
             if self.is_rework_mode:
                 self.set_status("OK", "#28a745", "#193322")
                 item_data = {
@@ -1769,6 +1770,7 @@ class QRScanStationApp:
                 self.direct_append_single_item(curr_model, item_data, content_text="RE-WORK")
                 return
 
+            # [매니저 모드 - 중복 재스캔]: 기존 NG 기록은 그대로 보존하고 신규 OK 행 추가 및 카운팅/대기열 증가
             elif self.is_manager_mode:
                 if not is_already_scanned:
                     self.set_status("NG", "#dc3545", "#3a1c1f")
@@ -1780,6 +1782,11 @@ class QRScanStationApp:
                     return
                 else:
                     self.set_status("OK", "#28a745", "#193322")
+                    self.model_counts[curr_model]["ok"] += 1
+                    self.model_counts[curr_model]["total"] += 1
+                    self.save_model_counts()
+                    self.update_stat_cards()
+
                     item_data = {
                         "pallet": cur_p,
                         "day": day_str,
@@ -1788,12 +1795,18 @@ class QRScanStationApp:
                         "result": "OK",
                         "content": "[DMC 재스캔]"
                     }
-                    self.tree.insert("", 0, values=(cur_p, day_str, time_str, "", raw_code, "OK", "[DMC 재스캔]"))
+                    # 신규 OK 항목으로 대기열에 편입하여 카운트 10개 정상 달성
+                    self.pending_items.append(item_data)
+                    item_id = self.tree.insert("", 0, values=(cur_p, day_str, time_str, "", raw_code, "OK", "[DMC 재스캔]"))
+                    self.pending_tree_ids.append(item_id)
+                    self.lbl_pending_status.config(text=self.t("pending_status", count=len(self.pending_items)))
+
                     self.direct_append_single_item(curr_model, item_data, content_text="[DMC 재스캔]")
                     self.is_manager_mode = False
                     self.btn_manager.config(bg="#2c323d", fg="#adb5bd", text=self.t("manager_btn"))
                     return
 
+            # [일반 모드]
             else:
                 if is_already_scanned:
                     self.model_counts[curr_model]["ng"] += 1
