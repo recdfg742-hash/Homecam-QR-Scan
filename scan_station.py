@@ -34,22 +34,22 @@ SINGLE_INSTANCE_MUTEX = None
 if os.name == 'nt':
     try:
         kernel32 = ctypes.windll.kernel32
-        MUTEX_NAME = "Aluko_Rear_QR_Reader_Mutex"
+        MUTEX_NAME = "Aluko_Front_QR_Reader_Mutex"
         SINGLE_INSTANCE_MUTEX = kernel32.CreateMutexW(None, False, MUTEX_NAME)
         if kernel32.GetLastError() == 183:
             root_temp = tk.Tk()
             root_temp.withdraw()
-            messagebox.showwarning("중복 실행 경고", "이미 Aluko_Rear_QR Reader 프로그램이 실행 중입니다.")
+            messagebox.showwarning("중복 실행 경고", "이미 Aluko_Front_QR Reader 프로그램이 실행 중입니다.")
             sys.exit(0)
     except Exception:
         pass
 
 # ==========================================
-# 2. REAR 모델 설정 (정식 AD 코드)
+# 2. FRONT 모델 설정 (정식 AD 코드)
 # ==========================================
 MODEL_CONFIG = {
-    'S-REAR': 'MPL02914AD',
-    'R-REAR': 'MPL02925AD'
+    'S-FRONT': 'MPL02916AD',
+    'R-FRONT': 'MPL02926AD'
 }
 
 CODE_TO_MODEL = {v: k for k, v in MODEL_CONFIG.items()}
@@ -64,9 +64,9 @@ def get_base_dir():
 
 BASE_DIR = get_base_dir()
 DATA_DIR = os.path.join(BASE_DIR, "data")
-COUNT_FILE = os.path.join(BASE_DIR, "counts_rear.json")
-STATE_FILE = os.path.join(BASE_DIR, "pallet_state_rear.json")
-CAPTURE_BASE_DIR = os.path.join(BASE_DIR, "captures_rear")
+COUNT_FILE = os.path.join(BASE_DIR, "counts_front.json")
+STATE_FILE = os.path.join(BASE_DIR, "pallet_state_front.json")
+CAPTURE_BASE_DIR = os.path.join(BASE_DIR, "captures_front")
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(CAPTURE_BASE_DIR, exist_ok=True)
 
@@ -103,7 +103,7 @@ def sanitize_filename(name):
 
 LANG_PACK = {
     "한국어": {
-        "title": "Aluko_Rear_QR Reader",
+        "title": "Aluko_Front_QR Reader",
         "pw_setting": "⚙ 비밀번호 설정",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -163,7 +163,7 @@ LANG_PACK = {
         "cam_ng_msg": "[CAM NG 발생]\n\n외장 USB 웹캠 연결이 끊어졌거나 영상이 수신되지 않습니다.\nUSB 케이블을 다시 연결하세요."
     },
     "English": {
-        "title": "Aluko_Rear_QR Reader",
+        "title": "Aluko_Front_QR Reader",
         "pw_setting": "⚙ Password Setting",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -208,7 +208,7 @@ LANG_PACK = {
         "ng_group_msg": "[Grouping NG: Item qty and Label packed qty mismatch]\n\nLabel QR Specified Qty: {expected}\nCurrent Scanned Item Qty: {current}\n\nQuantities do not match. Cannot proceed grouping.\nEnter 6-digit admin password to unlock.",
         "ng_limit_title": "⚠️ NG - Label QR Missing",
         "ng_limit_msg": "[NG Occurred: Label QR Missing]\n\nAll {max_cnt} items have already been scanned.\nThe 11th item will not be recorded.\nScan Label QR first to complete box grouping.\n\nEnter 6-digit admin password to unlock.",
-        "ng_mgr_err_title": "⚠️ NG - Manager Mode Error",
+        "ng_mgr_err_title": "⚠️️ NG - Manager Mode Error",
         "ng_mgr_err_msg": "[NG: New barcodes must be scanned in general mode]\n\nScanned Barcode: {code}\nOnly already registered barcodes can be re-entered in duplicate rescan mode.\n\nEnter 6-digit admin password to unlock.",
         "ng_dup_title": "🚫 QR NG - Duplicate Barcode Detected",
         "ng_dup_msg": "[QR NG Occurred: Already scanned barcode]\n\nScanned Barcode: {code}\nThis item and connected box header have been changed to NG.\n\nEnter 6-digit admin password to unlock.",
@@ -223,7 +223,7 @@ LANG_PACK = {
         "cam_ng_msg": "[CAM NG Occurred]\n\nExternal USB webcam is disconnected or frame is missing.\nPlease reconnect the USB cable."
     },
     "Polski": {
-        "title": "Aluko_Rear_QR Reader",
+        "title": "Aluko_Front_QR Reader",
         "pw_setting": "⚙ Ustawienia hasła",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -295,13 +295,13 @@ ACCENT_YELLOW = "#f59f00"
 class QRScanStationApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Aluko_Rear_QR Reader")
+        self.root.title("Aluko_Front_QR Reader")
         self.root.geometry("1440x880")
         self.root.minsize(1280, 780)
         self.root.configure(bg=BG_MAIN)
 
         self.current_lang = tk.StringVar(value="한국어")
-        self.current_model = tk.StringVar(value='S-REAR')
+        self.current_model = tk.StringVar(value='S-FRONT')
         self.admin_password = DEFAULT_PASSWORD
         self.model_session_id = 0
 
@@ -387,7 +387,7 @@ class QRScanStationApp:
         self.alarm_thread_running = False
 
     def find_and_open_camera(self):
-        search_order = [1, 2, 0, 3]  # 내장캠 끈 상태에서 외장캠이 0번에 배치되어도 완벽 탐색
+        search_order = [1, 2, 0, 3]  # 내장 0번 카메라 끈 환경에서도 외장캠 자동 인식
         for idx in search_order:
             for api_backend in [cv2.CAP_DSHOW, cv2.CAP_ANY]:
                 try:
@@ -516,12 +516,11 @@ class QRScanStationApp:
 
         self.root.after(33, self.update_camera_canvas)
 
-    # [핵심 수정: 한글/특수문자 경로 완벽 지원 및 메인 스레드 프레임 즉시 복사 확보]
+    # [수정: 한글/특수문자 경로 지원 및 메인 스레드 프레임 즉시 복사 확보]
     def capture_webcam_photo(self, label_code):
         if not CV_AVAILABLE or self.current_webcam_frame is None or not self.is_camera_ready:
             return
 
-        # 1) 메인 스레드에서 현재 영상을 0.001초만에 복사 확보 (타이밍 유실 방지)
         frame_to_save = self.current_webcam_frame.copy()
         curr_model = self.current_model.get()
         now = datetime.now()
@@ -539,7 +538,6 @@ class QRScanStationApp:
 
                 photo_path = os.path.join(target_save_dir, f"{safe_label_name}.jpg")
 
-                # 2) cv2.imwrite 대신 imencode + open wb 바이너리 기록 (한글/공백 경로 100% 저장 보장)
                 is_success, buffer = cv2.imencode(".jpg", img_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
                 if is_success:
                     with open(photo_path, "wb") as f:
@@ -562,7 +560,7 @@ class QRScanStationApp:
 
         selected_items = self.tree.selection()
         if not selected_items:
-            messagebox.showwarning("선택 없음", "삭제할 기록 행을 [REAR 기록] 테이블에서 마우스로 먼저 선택해 주세요.", parent=self.root)
+            messagebox.showwarning("선택 없음", "삭제할 기록 행을 [FRONT 기록] 테이블에서 마우스로 먼저 선택해 주세요.", parent=self.root)
             self.scan_entry.focus_set()
             return
 
@@ -836,7 +834,7 @@ class QRScanStationApp:
         header_frame = tk.Frame(self.root, bg=BG_MAIN, height=45)
         header_frame.pack(fill=tk.X, padx=20, pady=(10, 4))
 
-        tk.Label(header_frame, text="Aluko_Rear_QR Reader", font=("Arial", 12, "bold"), 
+        tk.Label(header_frame, text="Aluko_Front_QR Reader", font=("Arial", 12, "bold"), 
                  fg=TEXT_COLOR, bg=BG_MAIN).pack(side=tk.LEFT, padx=(0, 15))
 
         self.model_combo = ttk.Combobox(
@@ -1780,7 +1778,7 @@ class QRScanStationApp:
                 self.direct_append_single_item(curr_model, item_data, content_text="RE-WORK")
                 return
 
-            # [매니저 모드 - 중복 재스캔]: 기존 NG 기록은 그대로 보존하고, 신규 데이터 1개(OK)를 새로 추가하여 10개 카운트 충족
+            # [매니저 모드 - 중복 재스캔]: 기존 NG 행은 그대로 유지하고 신규 OK 행을 별도로 추가하여 10개 정상 충족
             elif self.is_manager_mode:
                 if not is_already_scanned:
                     self.set_status("NG", "#dc3545", "#3a1c1f")
@@ -1805,7 +1803,7 @@ class QRScanStationApp:
                         "result": "OK",
                         "content": "[DMC 재스캔]"
                     }
-                    # 신규 행으로 대기열에 추가되어 9개 -> 10개 정상 달성
+                    # 신규 데이터로 대기열에 추가되어 9개 -> 10개 정상 편입
                     self.pending_items.append(item_data)
                     item_id = self.tree.insert("", 0, values=(cur_p, day_str, time_str, "", raw_code, "OK", "[DMC 재스캔]"))
                     self.pending_tree_ids.append(item_id)
