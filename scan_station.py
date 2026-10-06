@@ -34,22 +34,22 @@ SINGLE_INSTANCE_MUTEX = None
 if os.name == 'nt':
     try:
         kernel32 = ctypes.windll.kernel32
-        MUTEX_NAME = "Aluko_Front_QR_Reader_Mutex"
+        MUTEX_NAME = "Aluko_Rear_QR_Reader_Mutex"
         SINGLE_INSTANCE_MUTEX = kernel32.CreateMutexW(None, False, MUTEX_NAME)
         if kernel32.GetLastError() == 183:
             root_temp = tk.Tk()
             root_temp.withdraw()
-            messagebox.showwarning("중복 실행 경고", "이미 Aluko_Front_QR Reader 프로그램이 실행 중입니다.")
+            messagebox.showwarning("중복 실행 경고", "이미 Aluko_Rear_QR Reader 프로그램이 실행 중입니다.")
             sys.exit(0)
     except Exception:
         pass
 
 # ==========================================
-# 2. FRONT 모델 설정 (정식 AD 코드)
+# 2. REAR 모델 설정 (정식 AD 코드)
 # ==========================================
 MODEL_CONFIG = {
-    'S-FRONT': 'MPL02916AD',
-    'R-FRONT': 'MPL02926AD'
+    'S-REAR': 'MPL02914AD',
+    'R-REAR': 'MPL02925AD'
 }
 
 CODE_TO_MODEL = {v: k for k, v in MODEL_CONFIG.items()}
@@ -64,9 +64,9 @@ def get_base_dir():
 
 BASE_DIR = get_base_dir()
 DATA_DIR = os.path.join(BASE_DIR, "data")
-COUNT_FILE = os.path.join(BASE_DIR, "counts_front.json")
-STATE_FILE = os.path.join(BASE_DIR, "pallet_state_front.json")
-CAPTURE_BASE_DIR = os.path.join(BASE_DIR, "captures_front")
+COUNT_FILE = os.path.join(BASE_DIR, "counts_rear.json")
+STATE_FILE = os.path.join(BASE_DIR, "pallet_state_rear.json")
+CAPTURE_BASE_DIR = os.path.join(BASE_DIR, "captures_rear")
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(CAPTURE_BASE_DIR, exist_ok=True)
 
@@ -103,7 +103,7 @@ def sanitize_filename(name):
 
 LANG_PACK = {
     "한국어": {
-        "title": "Aluko_Front_QR Reader",
+        "title": "Aluko_Rear_QR Reader",
         "pw_setting": "⚙ 비밀번호 설정",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -163,7 +163,7 @@ LANG_PACK = {
         "cam_ng_msg": "[CAM NG 발생]\n\n외장 USB 웹캠 연결이 끊어졌거나 영상이 수신되지 않습니다.\nUSB 케이블을 다시 연결하세요."
     },
     "English": {
-        "title": "Aluko_Front_QR Reader",
+        "title": "Aluko_Rear_QR Reader",
         "pw_setting": "⚙ Password Setting",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -223,7 +223,7 @@ LANG_PACK = {
         "cam_ng_msg": "[CAM NG Occurred]\n\nExternal USB webcam is disconnected or frame is missing.\nPlease reconnect the USB cable."
     },
     "Polski": {
-        "title": "Aluko_Front_QR Reader",
+        "title": "Aluko_Rear_QR Reader",
         "pw_setting": "⚙ Ustawienia hasła",
         "tab_scan": "  QR Scan  ",
         "tab_grouping": "  Grouping  ",
@@ -295,13 +295,13 @@ ACCENT_YELLOW = "#f59f00"
 class QRScanStationApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Aluko_Front_QR Reader")
+        self.root.title("Aluko_Rear_QR Reader")
         self.root.geometry("1440x880")
         self.root.minsize(1280, 780)
         self.root.configure(bg=BG_MAIN)
 
         self.current_lang = tk.StringVar(value="한국어")
-        self.current_model = tk.StringVar(value='S-FRONT')
+        self.current_model = tk.StringVar(value='S-REAR')
         self.admin_password = DEFAULT_PASSWORD
         self.model_session_id = 0
 
@@ -387,7 +387,7 @@ class QRScanStationApp:
         self.alarm_thread_running = False
 
     def find_and_open_camera(self):
-        search_order = [1, 2, 0, 3]  # 내장 0번 카메라 끈 환경에서도 외장캠 자동 인식
+        search_order = [1, 2, 0, 3]  # 내장 카메라를 끈 환경에서도 외장캠 자동 인식
         for idx in search_order:
             for api_backend in [cv2.CAP_DSHOW, cv2.CAP_ANY]:
                 try:
@@ -552,7 +552,7 @@ class QRScanStationApp:
 
         selected_items = self.tree.selection()
         if not selected_items:
-            messagebox.showwarning("선택 없음", "삭제할 기록 행을 [FRONT 기록] 테이블에서 마우스로 먼저 선택해 주세요.", parent=self.root)
+            messagebox.showwarning("선택 없음", "삭제할 기록 행을 [REAR 기록] 테이블에서 마우스로 먼저 선택해 주세요.", parent=self.root)
             self.scan_entry.focus_set()
             return
 
@@ -826,7 +826,7 @@ class QRScanStationApp:
         header_frame = tk.Frame(self.root, bg=BG_MAIN, height=45)
         header_frame.pack(fill=tk.X, padx=20, pady=(10, 4))
 
-        tk.Label(header_frame, text="Aluko_Front_QR Reader", font=("Arial", 12, "bold"), 
+        tk.Label(header_frame, text="Aluko_Rear_QR Reader", font=("Arial", 12, "bold"), 
                  fg=TEXT_COLOR, bg=BG_MAIN).pack(side=tk.LEFT, padx=(0, 15))
 
         self.model_combo = ttk.Combobox(
@@ -876,7 +876,7 @@ class QRScanStationApp:
         self.notebook.add(self.tab_scan, text=self.t("tab_scan"))
 
         self.tab_grouping = tk.Frame(self.notebook, bg=BG_MAIN)
-        self.notebook.add(self.tab_grouping, text=self.t("tab_grouping"))
+        self.notebook.add(self.tab_grouping, text=self.tab_grouping_text())
 
         self.tab_recode = tk.Frame(self.notebook, bg=BG_MAIN)
         self.notebook.add(self.tab_recode, text=self.t("tab_recode"))
@@ -884,6 +884,9 @@ class QRScanStationApp:
         self.build_scan_tab()
         self.build_grouping_tab()
         self.build_recode_tab()
+
+    def tab_grouping_text(self):
+        return self.t("tab_grouping")
 
     def build_scan_tab(self):
         main_frame = tk.Frame(self.tab_scan, bg=BG_MAIN)
