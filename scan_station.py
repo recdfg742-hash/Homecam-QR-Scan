@@ -148,7 +148,7 @@ LANG_PACK = {
         "ng_group_msg": "[Grouping NG: 단품 수량과 Label 포장 수량 불일치]\n\nLabel QR 지정 수량: {expected}개\n현재 스캔된 단품 수량: {current}개\n\n수량이 일치하지 않아 묶음을 진행할 수 없습니다.\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_limit_title": "⚠️ NG - Label QR 누락",
         "ng_limit_msg": "[NG 발생: Label QR 누락]\n\n단품이 이미 {max_cnt}개 모두 스캔되었습니다.\n11번째 단품은 기록되지 않습니다.\nLabel QR을 먼저 스캔하여 박스 묶음을 완료하십시오.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
-        "ng_mgr_err_title": "⚠️️ NG - 관리자 모드 오류",
+        "ng_mgr_err_title": "⚠️ NG - 관리자 모드 오류",
         "ng_mgr_err_msg": "[NG: 신규 바코드는 일반 모드에서 스캔해야 합니다]\n\n스캔 바코드: {code}\n중복 재스캔 모드에서는 이미 등록된 바코드만 재입력 가능합니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
         "ng_dup_title": "🚫 QR NG - 중복 바코드 감지",
         "ng_dup_msg": "[QR NG 발생: 이미 스캔된 바코드입니다]\n\n스캔 바코드: {code}\n해당 제품 및 연결된 박스 헤더가 NG로 변경되었습니다.\n\n관리자 비밀번호 6자리를 입력하여 해제하세요.",
@@ -1770,7 +1770,7 @@ class QRScanStationApp:
                 self.direct_append_single_item(curr_model, item_data, content_text="RE-WORK")
                 return
 
-            # [매니저 모드 - 중복 재스캔]: 기존 NG 기록은 그대로 보존하고 신규 OK 행 추가 및 카운팅/대기열 증가
+            # [매니저 모드 - 중복 재스캔]: 기존 NG 기록은 그대로 두고 신규 데이터(OK) 1개를 새로 등록하여 대기열/카운트 충족
             elif self.is_manager_mode:
                 if not is_already_scanned:
                     self.set_status("NG", "#dc3545", "#3a1c1f")
@@ -1795,7 +1795,7 @@ class QRScanStationApp:
                         "result": "OK",
                         "content": "[DMC 재스캔]"
                     }
-                    # 신규 OK 항목으로 대기열에 편입하여 카운트 10개 정상 달성
+                    # 신규 행으로 대기열에 추가되어 9개 -> 10개 정상 달성
                     self.pending_items.append(item_data)
                     item_id = self.tree.insert("", 0, values=(cur_p, day_str, time_str, "", raw_code, "OK", "[DMC 재스캔]"))
                     self.pending_tree_ids.append(item_id)
@@ -1817,12 +1817,10 @@ class QRScanStationApp:
                     self.set_status("QR NG", "#fd7e14", "#3d2716")
 
                     dup_text = self.t("dup_scan_tag")
+                    # 중복 발생 시 NG 행을 신규 삽입 (기존 이력 보존)
                     self.tree.insert("", 0, values=(cur_p, day_str, time_str, "-", raw_code, "NG", dup_text), tags=("ng_row",))
 
-                    for p_item in self.pending_items:
-                        if p_item["code"].strip().upper() == clean_upper_code:
-                            p_item["result"] = "NG"
-
+                    # 과거 이미 묶여서 나간 데이터인 경우 해당 과거 행 및 박스 헤더 표시를 NG로 업데이트
                     matched_label_qr = None
                     for item_id in self.tree.get_children():
                         vals = list(self.tree.item(item_id, "values"))
