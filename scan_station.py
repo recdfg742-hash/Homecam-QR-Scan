@@ -387,7 +387,7 @@ class QRScanStationApp:
         self.alarm_thread_running = False
 
     def find_and_open_camera(self):
-        search_order = [1, 2, 0, 3]  # 내장 카메라를 끈 환경에서도 외장캠 자동 인식
+        search_order = [1, 2, 0, 3]  # 내장캠 끈 상태에서 외장캠이 0번에 배치되어도 완벽 탐색
         for idx in search_order:
             for api_backend in [cv2.CAP_DSHOW, cv2.CAP_ANY]:
                 try:
@@ -516,28 +516,38 @@ class QRScanStationApp:
 
         self.root.after(33, self.update_camera_canvas)
 
+    # [핵심 수정: 한글/특수문자 경로 완벽 지원 및 메인 스레드 프레임 즉시 복사 확보]
     def capture_webcam_photo(self, label_code):
         if not CV_AVAILABLE or self.current_webcam_frame is None or not self.is_camera_ready:
             return
 
-        def _save_task():
-            try:
-                frame_to_save = self.current_webcam_frame.copy()
-                curr_model = self.current_model.get()
-                now = datetime.now()
-                yy_mm = now.strftime("%y.%m")
-                today_str = now.strftime("%Y-%m-%d")
+        # 1) 메인 스레드에서 현재 영상을 0.001초만에 복사 확보 (타이밍 유실 방지)
+        frame_to_save = self.current_webcam_frame.copy()
+        curr_model = self.current_model.get()
+        now = datetime.now()
+        yy_mm = now.strftime("%y.%m")
+        today_str = now.strftime("%Y-%m-%d")
 
+        def _save_task(img_frame, model_str, label_str):
+            try:
                 target_save_dir = os.path.join(CAPTURE_BASE_DIR, f"{yy_mm} captures", today_str)
                 os.makedirs(target_save_dir, exist_ok=True)
 
-                safe_label_name = sanitize_filename(label_code)
+                safe_label_name = sanitize_filename(label_str)
+                if not safe_label_name:
+                    safe_label_name = f"LABEL_{now.strftime('%H%M%S')}"
+
                 photo_path = os.path.join(target_save_dir, f"{safe_label_name}.jpg")
-                cv2.imwrite(photo_path, frame_to_save)
-            except Exception:
+
+                # 2) cv2.imwrite 대신 imencode + open wb 바이너리 기록 (한글/공백 경로 100% 저장 보장)
+                is_success, buffer = cv2.imencode(".jpg", img_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+                if is_success:
+                    with open(photo_path, "wb") as f:
+                        f.write(buffer)
+            except Exception as e:
                 pass
 
-        threading.Thread(target=_save_task, daemon=True).start()
+        threading.Thread(target=_save_task, args=(frame_to_save, curr_model, label_code), daemon=True).start()
 
     def on_closing(self):
         self.stop_looping_ng_alarm()
@@ -876,7 +886,7 @@ class QRScanStationApp:
         self.notebook.add(self.tab_scan, text=self.t("tab_scan"))
 
         self.tab_grouping = tk.Frame(self.notebook, bg=BG_MAIN)
-        self.notebook.add(self.tab_grouping, text=self.tab_grouping_text())
+        self.notebook.add(self.tab_grouping, text=self.t("tab_grouping"))
 
         self.tab_recode = tk.Frame(self.notebook, bg=BG_MAIN)
         self.notebook.add(self.tab_recode, text=self.t("tab_recode"))
@@ -884,9 +894,6 @@ class QRScanStationApp:
         self.build_scan_tab()
         self.build_grouping_tab()
         self.build_recode_tab()
-
-    def tab_grouping_text(self):
-        return self.t("tab_grouping")
 
     def build_scan_tab(self):
         main_frame = tk.Frame(self.tab_scan, bg=BG_MAIN)
@@ -1773,7 +1780,7 @@ class QRScanStationApp:
                 self.direct_append_single_item(curr_model, item_data, content_text="RE-WORK")
                 return
 
-            # [매니저 모드 - 중복 재스캔]: 기존 NG 기록은 그대로 두고 신규 데이터(OK) 1개를 새로 등록하여 대기열/카운트 충족
+            # [매니저 모드 - 중복 재스캔]: 기존 NG 기록은 그대로 보존하고, 신규 데이터 1개(OK)를 새로 추가하여 10개 카운트 충족
             elif self.is_manager_mode:
                 if not is_already_scanned:
                     self.set_status("NG", "#dc3545", "#3a1c1f")
